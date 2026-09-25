@@ -1,0 +1,21 @@
+
+# DBT generated files
+target/
+logs/
+dbt_packages/
+
+# Data
+*.csv
+*.parquet
+*.zip
+
+# Secrets
+.env
+*.p8
+*.pem
+kaggle.json
+
+
+.DS_Store
+__pycache__/
+.venv/
