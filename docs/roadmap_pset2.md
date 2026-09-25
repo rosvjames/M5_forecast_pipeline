@@ -12,11 +12,11 @@ Modo de trabajo: James implementa; Claude guía, revisa y explica. Marcar `[x]` 
 
 ## Fase 0 — Setup (base de todo)
 
-- [ ] Crear el repo `pset_2/` con git: `docker-compose.yml`, `.env.example`, `README.md`, `kestra/`, `dbt/`, `spark/`, `docs/`.
-- [ ] `.gitignore`: `.env`, datos (`*.csv`, `*.parquet`), `target/`, `logs/`, llaves privadas. **Nunca subir credenciales.**
-- [ ] Snowflake: cuenta (trial), warehouse XS con auto-suspend, base de datos `M5`, esquemas `BRONZE`, `SILVER`, `GOLD`, `OBT`. Rol y usuario de servicio para el pipeline (autenticación por key-pair).
+- [x] Crear el repo `pset_2/` con git: `docker-compose.yml`, `.env.example`, `README.md`, `kestra/`, `dbt/`, `spark/`, `docs/`.
+- [x] `.gitignore`: `.env`, datos (`*.csv`, `*.parquet`), `target/`, `logs/`, llaves privadas. **Nunca subir credenciales.**
+- [x] Snowflake: cuenta (trial), warehouse XS con auto-suspend, base de datos `M5`, esquemas `BRONZE`, `SILVER`, `GOLD`, `OBT`. Rol y usuario de servicio para el pipeline (autenticación por key-pair).
 - [ ] Token de Kaggle (aceptar las reglas de M5 con la cuenta). Va como secret en Kestra, no en el repo.
-- [ ] `docker-compose.yml` mínimo: Kestra (+ Postgres como backend) y Spark (master + worker, imagen oficial `apache/spark`). Decidir dbt Core: en Docker o en venv local.
+- [ ] `docker-compose.yml` mínimo: Kestra (+ Postgres como backend) y Spark (master + worker, imagen oficial `apache/spark`). dbt Core en Docker (el enunciado solo permite Docker o dbt Cloud).
 - [ ] Verificar: Kestra UI abre, Spark UI abre, `dbt debug` conecta a Snowflake.
 
 **Listo cuando:** `docker compose up` levanta todo y hay conexión a Snowflake desde Kestra, dbt y Spark.
