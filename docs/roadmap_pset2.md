@@ -15,7 +15,7 @@ Modo de trabajo: James implementa; Claude guía, revisa y explica. Marcar `[x]` 
 - [x] Crear el repo `pset_2/` con git: `docker-compose.yml`, `.env.example`, `README.md`, `kestra/`, `dbt/`, `spark/`, `docs/`.
 - [x] `.gitignore`: `.env`, datos (`*.csv`, `*.parquet`), `target/`, `logs/`, llaves privadas. **Nunca subir credenciales.**
 - [x] Snowflake: cuenta (trial), warehouse XS con auto-suspend, base de datos `M5`, esquemas `BRONZE`, `SILVER`, `GOLD`, `OBT`. Rol y usuario de servicio para el pipeline (autenticación por key-pair).
-- [ ] Token de Kaggle (aceptar las reglas de M5 con la cuenta). Va como secret en Kestra, no en el repo.
+- [x] Token de Kaggle (aceptar las reglas de M5 con la cuenta). Va como secret en Kestra, no en el repo.
 - [ ] `docker-compose.yml` mínimo: Kestra (+ Postgres como backend) y Spark (master + worker, imagen oficial `apache/spark`). dbt Core en Docker (el enunciado solo permite Docker o dbt Cloud).
 - [ ] Verificar: Kestra UI abre, Spark UI abre, `dbt debug` conecta a Snowflake.
 
@@ -28,6 +28,7 @@ Conceptos a decidir y poder explicar:
 - **Reloj simulado:** M5 es estático. Cada ejecución semanal del trigger se mapea a una semana de M5 (fecha de ejecución − fecha ancla → índice de semana → rango d_).
 - **Backfill:** d_1..d_1913 por semanas usando el backfill nativo del Schedule trigger. Las últimas 4 semanas (d_1914..d_1941) quedan como cargas incrementales.
 - **Idempotencia:** delete + insert (o MERGE) por partición. Llaves: ventas (item_id, store_id, date); precios (store_id, item_id, wm_yr_wk). Re-ejecutar una semana no duplica.
+- **Paso de archivos (decidido):** tareas separadas vía internal storage de Kestra (descarga con `outputFiles` → `snowflake.Upload` al stage → `COPY INTO`). Retry por tarea sin repetir la descarga. Purga con `PurgeCurrentExecutionFiles` en el bloque `finally`.
 - **Errores:** `retry` exponencial en tareas de red/descarga/carga; bloque `errors` que registre la falla; timeouts.
 
 Tareas:
