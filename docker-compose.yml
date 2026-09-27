@@ -72,6 +72,29 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+  spark-master:
+    image: apache/spark:4.1.3-scala2.13-java17-python3-ubuntu
+    hostname: spark-master
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    ports:
+      - "8090:8080"      #  Master UI (Kestra already uses 8080 on the host)
+    volumes:
+      - ./spark:/opt/spark-apps
+
+  spark-worker:
+    image: apache/spark:4.1.3-scala2.13-java17-python3-ubuntu
+    hostname: spark-worker
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    environment:
+      - SPARK_WORKER_MEMORY=4g
+      - SPARK_WORKER_CORES=2
+    ports:
+      - "8091:8081"      #  Worker UI
+    volumes:
+      - ./spark:/opt/spark-apps
+    depends_on:
+      - spark-master
   
 volumes:
   postgres_data:
