@@ -3,8 +3,10 @@ namespace: m5.pipeline
 description: Flow 2. Carga incremental de SALES, con control de semana y logging de errores. Se asume que el flujo ingest_raw se ejecutó previamente y creó los objetos de Bronze
 
 # El backfill lanza cientos de ejecuciones: que corran de a una.
+# QUEUE: las que sobran esperan su turno (no se cancelan ni fallan).
 concurrency:
   limit: 1
+  behavior: QUEUE
 
 inputs:
   # required: false porque cuando llegue el trigger vendrá vacío.
@@ -73,6 +75,9 @@ tasks:
           SELECT '{{ execution.id }}', '{{ flow.id }}', {{ k }}, 'SALES', COUNT(*), 'SUCCESS'
           FROM M5.BRONZE.SALES
           WHERE week_idx = {{ k }};
+        # Si Snowflake se cuelga, con concurrency 1 bloquearía todo el backfill detrás.
+        timeout: PT10M
+        # Retry seguro: DELETE + INSERT van en una transacción, un intento fallido se deshace completo y no duplica.
         retry:
           type: exponential
           interval: PT10S

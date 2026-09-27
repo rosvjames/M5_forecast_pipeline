@@ -33,10 +33,10 @@ Conceptos a decidir y poder explicar:
 
 Tareas:
 - [x] Flow 1: descarga desde Kaggle (API) → stage de Snowflake. `calendar` y `sell_prices` como carga completa (son chicos) o precios por `wm_yr_wk`.
-- [ ] Flow 2: carga semanal de ventas a Bronze (formato largo con valores originales, un lote por semana).
+- [x] Flow 2: carga semanal de ventas a Bronze (formato largo con valores originales, un lote por semana).
 - [ ] Trigger semanal (cron) + backfill ejecutado y verificado (conteo de filas por semana).
 - [ ] Probar un fallo a propósito para mostrar el retry.
-- [ ] Probar la idempotencia: re-ejecutar una semana y verificar que el conteo no cambia.
+- [x] Probar la idempotencia: re-ejecutar una semana y verificar que el conteo no cambia.
 
 **Listo cuando:** Bronze tiene 59.181.090 filas de ventas, 6.841.121 de precios y 1.969 de calendario, sin cargas manuales.
 
