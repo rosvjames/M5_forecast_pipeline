@@ -1,0 +1,197 @@
+id: ingest_raw
+namespace: m5.pipeline
+description: Flow 1. Crea los objetos de Bronze (idempotente), descarga M5 desde Kaggle al stage y hace full refresh de CALENDAR y SELL_PRICES.
+
+pluginDefaults:
+  - type: io.kestra.plugin.jdbc.snowflake
+    values:
+      url: "jdbc:snowflake://{{ envs.snowflake_account }}.snowflakecomputing.com/?MULTI_STATEMENT_COUNT=0"
+      username: "{{ envs.snowflake_user }}"
+      privateKey: "{{ secret('SNOWFLAKE_PRIVATE_KEY') }}"
+      role: "{{ envs.snowflake_role }}"
+      warehouse: "{{ envs.snowflake_warehouse }}"
+      database: "{{ envs.snowflake_database }}"
+
+tasks:
+  - id: bronze_ddl
+    type: io.kestra.plugin.jdbc.snowflake.Queries
+    sql: |
+      CREATE FILE FORMAT IF NOT EXISTS M5.BRONZE.CSV_M5
+        TYPE = CSV
+        SKIP_HEADER = 1
+        FIELD_OPTIONALLY_ENCLOSED_BY = '"'
+        EMPTY_FIELD_AS_NULL = TRUE;
+
+      CREATE STAGE IF NOT EXISTS M5.BRONZE.RAW_STAGE
+        FILE_FORMAT = M5.BRONZE.CSV_M5;
+
+      CREATE TABLE IF NOT EXISTS M5.BRONZE.CALENDAR (
+        date         DATE,
+        wm_yr_wk     NUMBER(38,0),
+        weekday      VARCHAR,
+        wday         NUMBER(38,0),
+        month        NUMBER(38,0),
+        year         NUMBER(38,0),
+        d            VARCHAR,
+        event_name_1 VARCHAR,
+        event_type_1 VARCHAR,
+        event_name_2 VARCHAR,
+        event_type_2 VARCHAR,
+        snap_CA      NUMBER(38,0),
+        snap_TX      NUMBER(38,0),
+        snap_WI      NUMBER(38,0),
+        _source_file VARCHAR,
+        _batch_id    VARCHAR,
+        _loaded_at   TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+      );
+
+      CREATE TABLE IF NOT EXISTS M5.BRONZE.SELL_PRICES (
+        store_id     VARCHAR,
+        item_id      VARCHAR,
+        wm_yr_wk     NUMBER(38,0),
+        sell_price   NUMBER(10,2),
+        _source_file VARCHAR,
+        _batch_id    VARCHAR,
+        _loaded_at   TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+      );
+
+      CREATE TABLE IF NOT EXISTS M5.BRONZE.SALES (
+        id           VARCHAR,
+        item_id      VARCHAR,
+        dept_id      VARCHAR,
+        cat_id       VARCHAR,
+        store_id     VARCHAR,
+        state_id     VARCHAR,
+        d            VARCHAR,
+        sales        NUMBER(38,0),
+        week_idx     NUMBER(38,0),
+        _source_row  NUMBER(38,0),
+        _source_file VARCHAR,
+        _batch_id    VARCHAR,
+        _loaded_at   TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+      );
+
+      CREATE TABLE IF NOT EXISTS M5.BRONZE.LOAD_LOG (
+        batch_id    VARCHAR,
+        flow_id     VARCHAR,
+        week_idx    NUMBER(38,0),
+        rows_loaded NUMBER(38,0),
+        status      VARCHAR,
+        table_name  VARCHAR,
+        error_message VARCHAR,
+        loaded_at   TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+      );
+
+  # Descarga la competencia completa (un zip, una llamada a la API) y expone solo los 3 CSV que usamos.
+  - id: download_m5
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+    containerImage: python:3.12-slim
+    env:
+      KAGGLE_API_TOKEN: "{{ secret('KAGGLE_API_TOKEN') }}"
+    beforeCommands:
+      - pip install --quiet --no-cache-dir kaggle
+    commands:
+      - set -eu
+      - kaggle competitions download -c m5-forecasting-accuracy
+      - python -c "import zipfile; zipfile.ZipFile('m5-forecasting-accuracy.zip').extractall('.', ['calendar.csv','sell_prices.csv','sales_train_evaluation.csv'])"
+      # Evidencia en logs: 1970 / 6841122 / 30491 líneas (con header)
+      - wc -l calendar.csv sell_prices.csv sales_train_evaluation.csv
+    outputFiles:
+      - calendar.csv
+      - sell_prices.csv
+      - sales_train_evaluation.csv
+    timeout: PT15M
+    retry:
+      type: exponential
+      interval: PT30S
+      maxInterval: PT5M
+      maxAttempts: 3
+
+  # PUT al stage interno (se sube comprimido como .csv.gz). OVERWRITE = FALSE: re-ejecutar no reemplaza lo que ya existe.
+  - id: upload
+    type: io.kestra.plugin.core.flow.ForEach
+    values:
+      - calendar.csv
+      - sell_prices.csv
+      - sales_train_evaluation.csv
+    tasks:
+      - id: upload_file
+        type: io.kestra.plugin.jdbc.snowflake.Upload
+        from: "{{ outputs.download_m5.outputFiles[taskrun.value] }}"
+        stageName: "@M5.BRONZE.RAW_STAGE"
+        prefix: m5
+        fileName: "{{ taskrun.value }}"
+        compress: true
+        retry:
+          type: exponential
+          interval: PT10S
+          maxInterval: PT2M
+          maxAttempts: 3
+
+  # Full refresh atómico: DELETE → COPY → LOAD_LOG en una sola transacción (Queries usa transaction: true por defecto).
+  # DELETE y no TRUNCATE: TRUNCATE puede hacer commit implícito y romper la atomicidad.
+  # FORCE = TRUE: el historial de carga (64 días) haría que el COPY cargue 0 filas al re-ejecutar;
+  #   cada ejecución es un reemplazo completo a propósito, así que forzamos la recarga.
+  # ON_ERROR = ABORT_STATEMENT: en Bronze preferimos fallar de forma visible antes que saltar filas en silencio.
+  - id: load_calendar
+    type: io.kestra.plugin.jdbc.snowflake.Queries
+    sql: |
+      DELETE FROM M5.BRONZE.CALENDAR;
+
+      COPY INTO M5.BRONZE.CALENDAR (
+        date, wm_yr_wk, weekday, wday, month, year, d,
+        event_name_1, event_type_1, event_name_2, event_type_2,
+        snap_CA, snap_TX, snap_WI,
+        _source_file, _batch_id
+      )
+      FROM (
+        SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+               METADATA$FILENAME, '{{ execution.id }}'
+        FROM @M5.BRONZE.RAW_STAGE/m5/calendar.csv.gz
+      )
+      FILE_FORMAT = (FORMAT_NAME = 'M5.BRONZE.CSV_M5')
+      ON_ERROR = ABORT_STATEMENT
+      FORCE = TRUE;
+
+      INSERT INTO M5.BRONZE.LOAD_LOG (batch_id, flow_id, table_name, rows_loaded, status)
+      SELECT '{{ execution.id }}', '{{ flow.id }}', 'CALENDAR', COUNT(*), 'SUCCESS'
+      FROM M5.BRONZE.CALENDAR;
+    retry:
+      type: exponential
+      interval: PT10S
+      maxInterval: PT2M
+      maxAttempts: 3
+
+  - id: load_sell_prices
+    type: io.kestra.plugin.jdbc.snowflake.Queries
+    sql: |
+      DELETE FROM M5.BRONZE.SELL_PRICES;
+
+      COPY INTO M5.BRONZE.SELL_PRICES (
+        store_id, item_id, wm_yr_wk, sell_price,
+        _source_file, _batch_id
+      )
+      FROM (
+        SELECT $1, $2, $3, $4,
+               METADATA$FILENAME, '{{ execution.id }}'
+        FROM @M5.BRONZE.RAW_STAGE/m5/sell_prices.csv.gz
+      )
+      FILE_FORMAT = (FORMAT_NAME = 'M5.BRONZE.CSV_M5')
+      ON_ERROR = ABORT_STATEMENT
+      FORCE = TRUE;
+
+      INSERT INTO M5.BRONZE.LOAD_LOG (batch_id, flow_id, table_name, rows_loaded, status)
+      SELECT '{{ execution.id }}', '{{ flow.id }}', 'SELL_PRICES', COUNT(*), 'SUCCESS'
+      FROM M5.BRONZE.SELL_PRICES;
+    retry:
+      type: exponential
+      interval: PT10S
+      maxInterval: PT2M
+      maxAttempts: 3
+
+finally:
+  # Borra los CSV (~500 MB) del internal storage de Kestra; ya quedaron en el stage de Snowflake.
+  - id: purge
+    type: io.kestra.plugin.core.storage.PurgeCurrentExecutionFiles

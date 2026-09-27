@@ -1,7 +1,0 @@
-id: hello
-namespace: m5.pipeline
-
-tasks:
-  - id: log
-    type: io.kestra.plugin.core.log.Log
-    message: Flow sync funcionando

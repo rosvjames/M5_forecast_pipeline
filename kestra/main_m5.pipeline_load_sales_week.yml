@@ -1,0 +1,85 @@
+id: load_sales_week
+namespace: m5.pipeline
+description: Flow 2. Carga incremental de SALES, con control de semana y logging de errores. Se asume que el flujo ingest_raw se ejecutó previamente y creó los objetos de Bronze
+
+# El backfill lanza cientos de ejecuciones: que corran de a una.
+concurrency:
+  limit: 1
+
+inputs:
+  # required: false porque cuando llegue el trigger vendrá vacío.
+  - id: week_idx
+    type: INT
+    required: false
+    description: Semana a cargar (0..277). Semana k = días d_(7k+1) .. d_min(7k+7, 1941).
+
+pluginDefaults:
+  - type: io.kestra.plugin.jdbc.snowflake
+    values:
+      url: "jdbc:snowflake://{{ envs.snowflake_account }}.snowflakecomputing.com/?MULTI_STATEMENT_COUNT=0"
+      username: "{{ envs.snowflake_user }}"
+      privateKey: "{{ secret('SNOWFLAKE_PRIVATE_KEY') }}"
+      role: "{{ envs.snowflake_role }}"
+      warehouse: "{{ envs.snowflake_warehouse }}"
+      database: "{{ envs.snowflake_database }}"
+
+tasks:
+  # Calcula el rango una sola vez. Con el trigger, solo cambia esta tarea (inputs.week_idx ?? fórmula con la fecha).
+  # Sin input, k = -1: cae en la rama "fuera de rango" y no carga nada.
+  - id: compute_week
+    type: io.kestra.plugin.core.output.OutputValues
+    values:
+      week_idx: "{{ inputs.week_idx ?? -1 }}"
+      d_ini: "{{ 7 * (inputs.week_idx ?? -1) + 1 }}"
+      d_fin: "{{ min(7 * (inputs.week_idx ?? -1) + 7, 1941) }}"
+
+  # Fuera de rango no hace nada: evita que un tick posterior al 2026-10-24 pida columnas $1950 que no existen.
+  - id: check_range
+    type: io.kestra.plugin.core.flow.If
+    condition: "{{ (outputs.compute_week.values.week_idx | number) >= 0 and (outputs.compute_week.values.week_idx | number) <= 277 }}"
+    then:
+      # DELETE → INSERT (UNPIVOT) → LOAD_LOG en una sola transacción: re-ejecutar una semana la reemplaza.
+      # UNPIVOT y no 7 UNION ALL: el archivo (~117 MB) se lee una sola vez.
+      # Columnas por día con comillas ("d_1") para que d quede 'd_1' y no 'D_1'.
+      # INCLUDE NULLS: una celda vacía llega a Bronze como NULL en vez de perder la fila en silencio.
+      # Mapeo: d_n → $(n+6) (las 6 primeras columnas son id, item_id, dept_id, cat_id, store_id, state_id).
+      - id: load_week
+        type: io.kestra.plugin.jdbc.snowflake.Queries
+        sql: |
+          {% set k = outputs.compute_week.values.week_idx | number %}
+          {% set d_ini = outputs.compute_week.values.d_ini | number %}
+          {% set d_fin = outputs.compute_week.values.d_fin | number %}
+          DELETE FROM M5.BRONZE.SALES WHERE week_idx = {{ k }};
+
+          INSERT INTO M5.BRONZE.SALES (
+            id, item_id, dept_id, cat_id, store_id, state_id,
+            d, sales, week_idx,
+            _source_row, _source_file, _batch_id
+          )
+          SELECT id, item_id, dept_id, cat_id, store_id, state_id,
+                 d, sales, {{ k }},
+                 src_row, src_file, '{{ execution.id }}'
+          FROM (
+            SELECT $1 AS id, $2 AS item_id, $3 AS dept_id, $4 AS cat_id, $5 AS store_id, $6 AS state_id,
+                   {% for n in range(d_ini, d_fin) %}${{ n + 6 }} AS "d_{{ n }}", {% endfor %}
+                   METADATA$FILE_ROW_NUMBER AS src_row,
+                   METADATA$FILENAME AS src_file
+            FROM @M5.BRONZE.RAW_STAGE/m5/sales_train_evaluation.csv.gz
+                 (FILE_FORMAT => 'M5.BRONZE.CSV_M5')
+          )
+          UNPIVOT INCLUDE NULLS (sales FOR d IN ({% for n in range(d_ini, d_fin) %}"d_{{ n }}"{% if not loop.last %}, {% endif %}{% endfor %}));
+
+          INSERT INTO M5.BRONZE.LOAD_LOG (batch_id, flow_id, week_idx, table_name, rows_loaded, status)
+          SELECT '{{ execution.id }}', '{{ flow.id }}', {{ k }}, 'SALES', COUNT(*), 'SUCCESS'
+          FROM M5.BRONZE.SALES
+          WHERE week_idx = {{ k }};
+        retry:
+          type: exponential
+          interval: PT10S
+          maxInterval: PT2M
+          maxAttempts: 3
+    else:
+      - id: out_of_range
+        type: io.kestra.plugin.core.log.Log
+        level: WARN
+        message: "week_idx={{ outputs.compute_week.values.week_idx }} fuera de rango (0..277). No se carga nada."

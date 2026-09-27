@@ -32,7 +32,7 @@ Conceptos a decidir y poder explicar:
 - **Errores:** `retry` exponencial en tareas de red/descarga/carga; bloque `errors` que registre la falla; timeouts.
 
 Tareas:
-- [ ] Flow 1: descarga desde Kaggle (API) → stage de Snowflake. `calendar` y `sell_prices` como carga completa (son chicos) o precios por `wm_yr_wk`.
+- [x] Flow 1: descarga desde Kaggle (API) → stage de Snowflake. `calendar` y `sell_prices` como carga completa (son chicos) o precios por `wm_yr_wk`.
 - [ ] Flow 2: carga semanal de ventas a Bronze (formato largo con valores originales, un lote por semana).
 - [ ] Trigger semanal (cron) + backfill ejecutado y verificado (conteo de filas por semana).
 - [ ] Probar un fallo a propósito para mostrar el retry.
