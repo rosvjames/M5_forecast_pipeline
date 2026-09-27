@@ -8,6 +8,45 @@ Modo de trabajo: James implementa; Claude guía, revisa y explica. Marcar `[x]` 
 
 **Rúbrica:** Kestra 15 % · Calidad 20 % · dbt/Bronze-Silver-Gold 15 % · Star schema 15 % · Spark/OBT 15 % · Infra y reproducibilidad 10 % · Documento 10 %.
 
+**Entrega: domingo 4 de octubre de 2026.**
+
+---
+
+## Estado actual y cómo sumarse
+
+*Actualizado: 27-sep-2026.*
+
+| Fase (PDF) | Estado |
+|---|---|
+| 0 · Infraestructura (PDF §1) | ✅ Docker Compose con Kestra, Spark y dbt, conectado a Snowflake. Falta el diagrama. |
+| 1 · Ingesta Kestra → Bronze (PDF §2) | 🔄 `CALENDAR` y `SELL_PRICES` completas. `SALES` con backfill de las semanas 0–276; la 277 entra con el cron del 3-oct. Falta el bloque `errors` y la demo del retry. |
+| 2 · Calidad (PDF §3) | ⬜ Las cifras ya están en el EDA (`eda/reports/`). Falta recalcularlas en SQL sobre Bronze. |
+| 3 · dbt Silver | ⬜ |
+| 4 · dbt Gold (star schema) | ⬜ |
+| 5 · Spark → OBT | ⬜ |
+| 6 · Documento y README | ⬜ README al día hasta la ingesta. |
+
+**Qué hay en Snowflake (`M5.BRONZE`):**
+- `CALENDAR`, `SELL_PRICES` y `SALES` con los valores originales de Kaggle, más `_source_file`, `_batch_id` y `_loaded_at`.
+- `SALES` está en formato largo: una fila por `item_id` × `store_id` × `d`, con `d` como texto (`'d_1'`) y sin fecha. El join con calendar se hace en Silver.
+- `LOAD_LOG` guarda la auditoría de cargas.
+- En `@RAW_STAGE/m5/` están los CSV originales intactos.
+
+**Tareas que se pueden adelantar sin bloquear la ingesta.** Anota tu nombre en la tarea antes de empezar, para no duplicar trabajo.
+
+| Tarea | Fase | Depende de | Responsable |
+|---|---|---|---|
+| Consultas de calidad sobre Bronze (completitud, precisión, consistencia y validez), comparadas con las cifras de `eda/reports/01`–`04`. Guardarlas en `dbt/analyses/`. | 2 | Nada: Bronze ya tiene datos | |
+| `sources.yml` sobre `BRONZE` y los modelos `stg_calendar` y `stg_sell_prices`. Borrar `dbt/models/example/`. | 3 | Nada | |
+| `stg_sales` (join a calendar por `d`) y los flags de limpieza de `enfoque_proyecto.md` §8 | 3 | `stg_calendar` | |
+| Conector Spark–Snowflake: jars en la imagen o en `spark/`, y una prueba que lea `BRONZE.CALENDAR` desde Spark | 5 | Nada | |
+| Diagrama de arquitectura y sección *Batch vs. streaming* del documento | 6 | Nada | |
+
+**Reglas para trabajar en paralelo:**
+- Una rama por tarea y PR a `main`. No edites `kestra/` sin avisar: los flows están corriendo.
+- Snowflake: pendiente decidir si cada uno usa su propia cuenta trial (el README reproduce todo desde cero, con ~35 min de backfill) o si se crean usuarios en la cuenta compartida. **Nadie** usa el usuario de servicio `M5_PIPELINE_USER` con una llave copiada.
+- Los modelos dbt leen de `source('bronze', ...)`, nunca con nombres de tabla escritos a mano.
+
 ---
 
 ## Fase 0 — Setup (base de todo)
@@ -25,8 +64,8 @@ Modo de trabajo: James implementa; Claude guía, revisa y explica. Marcar `[x]` 
 
 Conceptos a decidir y poder explicar:
 - **Bronze conserva el dato original:** CSV crudos en un stage de Snowflake (inmutables) + tablas Bronze con los valores sin alterar y metadatos de carga (`_loaded_at`, `_source_file`, `_batch_id`).
-- **Reloj simulado:** M5 es estático. Cada ejecución semanal del trigger se mapea a una semana de M5 (fecha de ejecución − fecha ancla → índice de semana → rango d_).
-- **Backfill:** d_1..d_1913 por semanas usando el backfill nativo del Schedule trigger. Las últimas 4 semanas (d_1914..d_1941) quedan como cargas incrementales.
+- **Reloj simulado:** M5 es estático. Cada ejecución semanal del trigger se mapea a una semana de M5 (fecha de ejecución − fecha ancla → índice de semana → rango d_). Ancla = 2021-06-12 (sábado). Hay 278 semanas (k = 0..277) y la 277 solo tiene 2 días.
+- **Backfill:** k = 0..276 (d_1..d_1939) con el backfill nativo del Schedule trigger. La semana 277 (d_1940–1941) entra como carga incremental con el tick real del sábado 2026-10-03. El ancla se eligió para que ese tick cayera antes de la entrega.
 - **Idempotencia:** delete + insert (o MERGE) por partición. Llaves: ventas (item_id, store_id, date); precios (store_id, item_id, wm_yr_wk). Re-ejecutar una semana no duplica.
 - **Paso de archivos (decidido):** tareas separadas vía internal storage de Kestra (descarga con `outputFiles` → `snowflake.Upload` al stage → `COPY INTO`). Retry por tarea sin repetir la descarga. Purga con `PurgeCurrentExecutionFiles` en el bloque `finally`.
 - **Errores:** `retry` exponencial en tareas de red/descarga/carga; bloque `errors` que registre la falla; timeouts.

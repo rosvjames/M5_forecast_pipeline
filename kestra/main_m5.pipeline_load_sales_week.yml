@@ -8,6 +8,11 @@ concurrency:
   limit: 1
   behavior: QUEUE
 
+# Reloj simulado: el sábado del ancla es la semana 0 (d_1). Cada sábado posterior avanza una semana.
+# Con este ancla, k = 277 (última semana, d_1940..d_1941) llega el sábado 2026-10-03.
+variables:
+  anchor_date: "2021-06-12T00:00:00Z"
+
 inputs:
   # required: false porque cuando llegue el trigger vendrá vacío.
   - id: week_idx
@@ -26,16 +31,29 @@ pluginDefaults:
       database: "{{ envs.snowflake_database }}"
 
 tasks:
-  # Calcula el rango una sola vez. Con el trigger, solo cambia esta tarea (inputs.week_idx ?? fórmula con la fecha).
-  # Sin input, k = -1: cae en la rama "fuera de rango" y no carga nada.
+  # k = input si viene; si no, semanas completas desde el ancla hasta la fecha lógica:
+  #   trigger.date (cron o backfill) ?? execution.startDate (manual sin input = "la semana de hoy").
+  # | timestamp da epoch en segundos (Long); 604800 = segundos en una semana.
+  # (s - s % 604800) / 604800 = división entera exacta. Fechas antes del ancla → -1 (fuera de rango),
+  # porque el % de Java trunca hacia cero y sin este caso darían k = 0.
   - id: compute_week
     type: io.kestra.plugin.core.output.OutputValues
     values:
-      week_idx: "{{ inputs.week_idx ?? -1 }}"
-      d_ini: "{{ 7 * (inputs.week_idx ?? -1) + 1 }}"
-      d_fin: "{{ min(7 * (inputs.week_idx ?? -1) + 7, 1941) }}"
+      week_idx: >-
+        {%- if inputs.week_idx is not null -%}{{ inputs.week_idx }}
+        {%- else -%}
+        {%- set s = ((trigger.date ?? execution.startDate) | timestamp) - (vars.anchor_date | timestamp) -%}
+        {%- if s < 0 -%}-1{%- else -%}{{ (s - s % 604800) / 604800 }}{%- endif -%}
+        {%- endif -%}
 
-  # Fuera de rango no hace nada: evita que un tick posterior al 2026-10-24 pida columnas $1950 que no existen.
+  # Rango de días de la semana k (separado porque un OutputValues no puede leer sus propios valores).
+  - id: week_range
+    type: io.kestra.plugin.core.output.OutputValues
+    values:
+      d_ini: "{{ 7 * (outputs.compute_week.values.week_idx | number) + 1 }}"
+      d_fin: "{{ min(7 * (outputs.compute_week.values.week_idx | number) + 7, 1941) }}"
+
+  # Fuera de rango no hace nada: evita que un tick posterior al 2026-10-03 pida columnas $1950 que no existen.
   - id: check_range
     type: io.kestra.plugin.core.flow.If
     condition: "{{ (outputs.compute_week.values.week_idx | number) >= 0 and (outputs.compute_week.values.week_idx | number) <= 277 }}"
@@ -49,8 +67,8 @@ tasks:
         type: io.kestra.plugin.jdbc.snowflake.Queries
         sql: |
           {% set k = outputs.compute_week.values.week_idx | number %}
-          {% set d_ini = outputs.compute_week.values.d_ini | number %}
-          {% set d_fin = outputs.compute_week.values.d_fin | number %}
+          {% set d_ini = outputs.week_range.values.d_ini | number %}
+          {% set d_fin = outputs.week_range.values.d_fin | number %}
           DELETE FROM M5.BRONZE.SALES WHERE week_idx = {{ k }};
 
           INSERT INTO M5.BRONZE.SALES (
@@ -88,3 +106,13 @@ tasks:
         type: io.kestra.plugin.core.log.Log
         level: WARN
         message: "week_idx={{ outputs.compute_week.values.week_idx }} fuera de rango (0..277). No se carga nada."
+
+# Sábados 06:00 UTC. timezone explícito: la cuenta de semanas asume que la fecha del tick cae en sábado (UTC),
+# igual que el ancla. Si se cambia a una zona local, revisar que el tick siga siendo sábado en UTC.
+# recoverMissedSchedules: ALL → si Kestra estuvo apagado, al volver lanza cada sábado perdido (una semana por tick).
+triggers:
+  - id: weekly
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 6 * * 6"
+    timezone: UTC
+    recoverMissedSchedules: ALL

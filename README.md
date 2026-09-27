@@ -13,7 +13,7 @@ Kaggle → Kestra → BRONZE → dbt → SILVER → dbt → GOLD → Spark → O
 
 El enfoque del proyecto y las decisiones de diseño están en [`docs/enfoque_proyecto.md`](docs/enfoque_proyecto.md). El avance por fases está en [`docs/roadmap_pset2.md`](docs/roadmap_pset2.md).
 
-> **Estado actual:** Fase 0 (infraestructura) completa. Kestra, Spark y dbt corren en Docker y Kestra y dbt ya se conectan a Snowflake. La ingesta y las transformaciones están en desarrollo.
+> **Estado actual (27-sep-2026):** infraestructura lista e ingesta a Bronze casi completa. `CALENDAR` y `SELL_PRICES` están cargadas, y `SALES` tiene el backfill de las semanas 0–276. La semana 277 entra con el cron del sábado 3-oct. Falta demostrar el retry. Silver, Gold, OBT y el documento están pendientes. Qué hay hecho y en qué se puede ayudar: [`docs/roadmap_pset2.md`](docs/roadmap_pset2.md#estado-actual-y-cómo-sumarse).
 
 ---
 
@@ -161,6 +161,39 @@ dbt no aparece en esta tabla porque no queda corriendo: se ejecuta a demanda (ve
    ```
    Debe imprimir `Pi is roughly 3.14...`.
 
+### 7. Cargar la capa Bronze (ingesta)
+
+Hay dos flows en el namespace `m5.pipeline`:
+
+| Flow | Qué hace | Cuándo corre |
+|---|---|---|
+| `ingest_raw` | Crea los objetos de Bronze (idempotente), descarga M5 desde la API de Kaggle, sube los 3 CSV al stage `@M5.BRONZE.RAW_STAGE/m5/` y hace carga completa de `CALENDAR` y `SELL_PRICES` | Una vez, a mano (**Execute** en la UI) |
+| `load_sales_week` | Carga **una semana** de ventas en `SALES` (formato largo, valores originales), en una transacción `DELETE` + `INSERT` por `week_idx` | Trigger `weekly`, sábados 06:00 UTC, más el backfill |
+
+**Reloj simulado.** M5 es estático, así que cada ejecución semanal se asigna a una semana de M5: `k = semanas completas entre el ancla (2021-06-12) y la fecha del trigger`. La semana `k` carga `d_(7k+1)` … `d_min(7k+7, 1941)`, de modo que hay 278 semanas (0–277). Fuera de ese rango el flow no carga nada. Para cargar una semana concreta a mano, ejecuta el flow con el input `week_idx`.
+
+**Pasos, desde cero:**
+
+1. Ejecuta `ingest_raw` y espera a que termine en verde (unos minutos).
+2. En `load_sales_week` → **Triggers** → `weekly` → **Backfill executions**:
+   - Inicio: `2021-06-12 00:00`. Fin: ahora.
+   - `week_idx`: **vacío**.
+   - En *Other properties*, pon el label `load_type` = `backfill`. Si la fila de label queda vacía, la UI da error.
+
+   Corren de a una (~6 s cada una, ~35 min en total). No dejes que el equipo entre en reposo mientras corre (en macOS: `caffeinate -i -t 2700`).
+3. Verifica en Snowflake:
+   ```sql
+   SELECT COUNT(*) FROM M5.BRONZE.CALENDAR;       -- 1.969
+   SELECT COUNT(*) FROM M5.BRONZE.SELL_PRICES;    -- 6.841.121
+   SELECT COUNT(*), COUNT(DISTINCT week_idx), MIN(week_idx), MAX(week_idx), SUM(sales)
+   FROM M5.BRONZE.SALES;
+   -- Con el backfill hasta hoy: 59.120.110 | 277 | 0 | 276 | 66.821.317
+   -- Con las 278 semanas:      59.181.090 | 278 | 0 | 277 | 66.927.173
+   ```
+   `M5.BRONZE.LOAD_LOG` guarda una fila por carga (ejecución, tabla, semana, filas y estado).
+
+Re-ejecutar cualquiera de los dos flows no duplica datos.
+
 ---
 
 ## Uso diario
@@ -213,6 +246,8 @@ docker compose down -v     # además BORRA los volúmenes: historial de Kestra y
 | `dbt debug`: `profiles.yml file [ERROR not found]` | Revisa que exista `dbt/profiles.yml`. El contenedor lo busca en `DBT_PROFILES_DIR=/usr/app/dbt`. |
 | `dbt debug` falla con un error de autenticación JWT | La llave pública registrada en Snowflake no corresponde a la privada. Compara el `RSA_PUBLIC_KEY_FP` de `DESC USER M5_PIPELINE_USER;` con: `openssl rsa -pubin -in ~/.snowflake/rsa_key.pub -outform DER \| openssl dgst -sha256 -binary \| openssl enc -base64` |
 | Error de volumen en el servicio `dbt` al arrancar | `SNOWFLAKE_PRIVATE_KEY_PATH` está vacío o no es una ruta absoluta. |
+| Una tarea `Queries` falla con `Actual statement count N did not match the desired statement count 1` (en la UI se ve como `Connection is closed`) | El driver de Snowflake acepta una sola sentencia por llamada. La URL JDBC de los flows lleva `?MULTI_STATEMENT_COUNT=0`. No lo quites. |
+| El backfill falla con `Backfill["labels"] … key: null, value: null` | Quedó una fila de label vacía en *Other properties*. Llénala o bórrala. |
 | dbt va lento en Mac con chip Apple | La imagen de dbt es solo `amd64` y corre emulada (`platform: linux/amd64`). Es esperado. |
 
 ## Seguridad
