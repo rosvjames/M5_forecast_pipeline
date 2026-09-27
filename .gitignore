@@ -19,3 +19,4 @@ kaggle.json
 .DS_Store
 __pycache__/
 .venv/
+.user.yml

@@ -1,0 +1,15 @@
+id: snowflake_check
+namespace: m5.pipeline
+description: Verifica la conexión de Kestra a Snowflake con el usuario de servicio (key-pair).
+
+tasks:
+  - id: whoami
+    type: io.kestra.plugin.jdbc.snowflake.Query
+    url: "jdbc:snowflake://{{ envs.snowflake_account }}.snowflakecomputing.com"
+    username: "{{ envs.snowflake_user }}"
+    privateKey: "{{ secret('SNOWFLAKE_PRIVATE_KEY') }}"
+    role: "{{ envs.snowflake_role }}"
+    warehouse: "{{ envs.snowflake_warehouse }}"
+    database: "{{ envs.snowflake_database }}"
+    sql: SELECT CURRENT_USER() AS usr, CURRENT_ROLE() AS rol, CURRENT_WAREHOUSE() AS wh
+    fetchType: FETCH_ONE

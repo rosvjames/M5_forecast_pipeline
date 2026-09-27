@@ -30,6 +30,13 @@ services:
       # Flows versionados. Nombre de archivo obligatorio: <tenant>_<namespace>_<id>.yml (ej. main_m5.pipeline_hello.yml)
       - ./kestra:/app/flows
     environment:
+      # Config no secreta de Snowflake, reutilizando las variables de .env.
+      # Kestra expone las variables ENV_* en los flows como {{ envs.snowflake_account }}, etc.
+      ENV_SNOWFLAKE_ACCOUNT: ${SNOWFLAKE_ACCOUNT}
+      ENV_SNOWFLAKE_USER: ${SNOWFLAKE_USER}
+      ENV_SNOWFLAKE_ROLE: ${SNOWFLAKE_ROLE}
+      ENV_SNOWFLAKE_WAREHOUSE: ${SNOWFLAKE_WAREHOUSE}
+      ENV_SNOWFLAKE_DATABASE: ${SNOWFLAKE_DATABASE}
       KESTRA_CONFIGURATION: |
         datasources:
           postgres:
@@ -95,6 +102,17 @@ services:
       - ./spark:/opt/spark-apps
     depends_on:
       - spark-master
+  
+  dbt:
+    image: ghcr.io/dbt-labs/dbt-snowflake:1.9.0
+    platform: linux/amd64 
+    profiles: ["tools"]
+    env_file: .env
+    environment:
+      - DBT_PROFILES_DIR=/usr/app/dbt
+    volumes:
+      - ./dbt:/usr/app/dbt
+      - ${SNOWFLAKE_PRIVATE_KEY_PATH}:/secrets/rsa_key.p8:ro
   
 volumes:
   postgres_data:
