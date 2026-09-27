@@ -20,6 +20,15 @@ inputs:
     required: false
     description: Semana a cargar (0..277). Semana k = días d_(7k+1) .. d_min(7k+7, 1941).
 
+  # Solo para la demo de manejo de errores. TRANSIENT falla el 1.er intento de load_week; PERMANENT falla todos.
+  - id: simulate_failure
+    type: SELECT
+    values:
+      - NONE
+      - TRANSIENT
+      - PERMANENT
+    defaults: NONE
+
 pluginDefaults:
   - type: io.kestra.plugin.jdbc.snowflake
     values:
@@ -70,6 +79,10 @@ tasks:
           {% set d_ini = outputs.week_range.values.d_ini | number %}
           {% set d_fin = outputs.week_range.values.d_fin | number %}
           DELETE FROM M5.BRONZE.SALES WHERE week_idx = {{ k }};
+          {% if inputs.simulate_failure == 'PERMANENT'
+                or (inputs.simulate_failure == 'TRANSIENT' and taskrun.attemptsCount == 0) %}
+          SELECT 1/0;   -- falla simulada, solo para la demo: va después del DELETE para mostrar el rollback
+          {% endif %}
 
           INSERT INTO M5.BRONZE.SALES (
             id, item_id, dept_id, cat_id, store_id, state_id,
@@ -106,6 +119,25 @@ tasks:
         type: io.kestra.plugin.core.log.Log
         level: WARN
         message: "week_idx={{ outputs.compute_week.values.week_idx }} fuera de rango (0..277). No se carga nada."
+
+# Solo corre si una tarea falló después de agotar sus retries.
+# El Log va primero: si lo que falla es la conexión a Snowflake, el INSERT también falla, pero el Log queda en Kestra.
+# week_idx ?? 'NULL': si falló antes de compute_week, ese output no existe.
+# Comillas simples escapadas ('' ) para no romper el SQL, y mensaje recortado a 1000 caracteres.
+errors:
+  - id: log_failure
+    type: io.kestra.plugin.core.log.Log
+    level: ERROR
+    message: "Falló {{ flow.id }} (week_idx={{ outputs.compute_week.values.week_idx ?? 'desconocida' }}): {{ errorLogs()[0].message ?? 'sin mensaje' }}"
+
+  - id: log_failed_status
+    type: io.kestra.plugin.jdbc.snowflake.Query
+    sql: |
+      INSERT INTO M5.BRONZE.LOAD_LOG (batch_id, flow_id, week_idx, table_name, rows_loaded, status, error_message)
+      VALUES (
+        '{{ execution.id }}', '{{ flow.id }}', {{ outputs.compute_week.values.week_idx ?? 'NULL' }}, 'SALES', 0, 'FAILED',
+        '{{ (errorLogs()[0].message ?? 'sin mensaje') | replace({"'": "''"}) | abbreviate(1000) }}'
+      );
 
 # Sábados 06:00 UTC. timezone explícito: la cuenta de semanas asume que la fecha del tick cae en sábado (UTC),
 # igual que el ancla. Si se cambia a una zona local, revisar que el tick siga siendo sábado en UTC.

@@ -191,6 +191,25 @@ tasks:
       maxInterval: PT2M
       maxAttempts: 3
 
+# Solo corre si una tarea falló después de agotar sus retries.
+# El Log va primero: si lo que falla es la conexión a Snowflake, el INSERT también falla, pero el Log queda en Kestra.
+# Este flow no carga por semana: week_idx = NULL y table_name = el flow.
+# Mensaje entre $$...$$ (comillas de dólar de Snowflake): no interpreta ' ni \, así un mensaje con comillas o barras no rompe el SQL. Recortado a 1000 caracteres.
+errors:
+  - id: log_failure
+    type: io.kestra.plugin.core.log.Log
+    level: ERROR
+    message: "Falló {{ flow.id }}: {{ errorLogs()[0].message ?? 'sin mensaje' }}"
+
+  - id: log_failed_status
+    type: io.kestra.plugin.jdbc.snowflake.Query
+    sql: |
+      INSERT INTO M5.BRONZE.LOAD_LOG (batch_id, flow_id, week_idx, table_name, rows_loaded, status, error_message)
+      VALUES (
+        '{{ execution.id }}', '{{ flow.id }}', NULL, '{{ flow.id }}', 0, 'FAILED',
+        $${{ (errorLogs()[0].message ?? 'sin mensaje') | abbreviate(1000) }}$$
+      );
+
 finally:
   # Borra los CSV (~500 MB) del internal storage de Kestra; ya quedaron en el stage de Snowflake.
   - id: purge

@@ -19,7 +19,7 @@ Modo de trabajo: James implementa; Claude guía, revisa y explica. Marcar `[x]` 
 | Fase (PDF) | Estado |
 |---|---|
 | 0 · Infraestructura (PDF §1) | ✅ Docker Compose con Kestra, Spark y dbt, conectado a Snowflake. Falta el diagrama. |
-| 1 · Ingesta Kestra → Bronze (PDF §2) | 🔄 `CALENDAR` y `SELL_PRICES` completas. `SALES` con backfill de las semanas 0–276; la 277 entra con el cron del 3-oct. Falta el bloque `errors` y la demo del retry. |
+| 1 · Ingesta Kestra → Bronze (PDF §2) | 🔄 `CALENDAR` y `SELL_PRICES` completas. `SALES` con backfill de las semanas 0–276; la 277 entra con el cron del 3-oct. Bloque `errors` y demo del retry listos. |
 | 2 · Calidad (PDF §3) | ⬜ Las cifras ya están en el EDA (`eda/reports/`). Falta recalcularlas en SQL sobre Bronze. |
 | 3 · dbt Silver | ⬜ |
 | 4 · dbt Gold (star schema) | ⬜ |
@@ -73,8 +73,8 @@ Conceptos a decidir y poder explicar:
 Tareas:
 - [x] Flow 1: descarga desde Kaggle (API) → stage de Snowflake. `calendar` y `sell_prices` como carga completa (son chicos) o precios por `wm_yr_wk`.
 - [x] Flow 2: carga semanal de ventas a Bronze (formato largo con valores originales, un lote por semana).
-- [ ] Trigger semanal (cron) + backfill ejecutado y verificado (conteo de filas por semana).
-- [ ] Probar un fallo a propósito para mostrar el retry.
+- [x] Trigger semanal (cron) + backfill ejecutado y verificado (conteo de filas por semana). Semanas 0–276 OK (59.120.110 filas, SUM 66.821.317); la 277 llega con el cron del 3-oct.
+- [x] Probar un fallo a propósito para mostrar el retry. Input `simulate_failure` (TRANSIENT → 2 intentos y SUCCESS; PERMANENT → 3 intentos, bloque `errors` y fila FAILED en LOAD_LOG). Semana 100 sigue con 213.430 filas.
 - [x] Probar la idempotencia: re-ejecutar una semana y verificar que el conteo no cambia.
 
 **Listo cuando:** Bronze tiene 59.181.090 filas de ventas, 6.841.121 de precios y 1.969 de calendario, sin cargas manuales.

@@ -13,7 +13,7 @@ Kaggle → Kestra → BRONZE → dbt → SILVER → dbt → GOLD → Spark → O
 
 El enfoque del proyecto y las decisiones de diseño están en [`docs/enfoque_proyecto.md`](docs/enfoque_proyecto.md). El avance por fases está en [`docs/roadmap_pset2.md`](docs/roadmap_pset2.md).
 
-> **Estado actual (27-sep-2026):** infraestructura lista e ingesta a Bronze casi completa. `CALENDAR` y `SELL_PRICES` están cargadas, y `SALES` tiene el backfill de las semanas 0–276. La semana 277 entra con el cron del sábado 3-oct. Falta demostrar el retry. Silver, Gold, OBT y el documento están pendientes. Qué hay hecho y en qué se puede ayudar: [`docs/roadmap_pset2.md`](docs/roadmap_pset2.md#estado-actual-y-cómo-sumarse).
+> **Estado actual (27-sep-2026):** infraestructura lista e ingesta a Bronze casi completa. `CALENDAR` y `SELL_PRICES` están cargadas, y `SALES` tiene el backfill de las semanas 0–276. La semana 277 entra con el cron del sábado 3-oct. El retry y el bloque `errors` ya están demostrados. Silver, Gold, OBT y el documento están pendientes. Qué hay hecho y en qué se puede ayudar: [`docs/roadmap_pset2.md`](docs/roadmap_pset2.md#estado-actual-y-cómo-sumarse).
 
 ---
 
@@ -147,7 +147,7 @@ dbt no aparece en esta tabla porque no queda corriendo: se ejecuta a demanda (ve
 
 ### 6. Verificar
 
-1. **Kestra → Snowflake:** en la UI, en *Flows*, ejecuta `m5.pipeline.snowflake_check`. En los outputs de la tarea `whoami` deben aparecer `M5_PIPELINE_USER`, `M5_PIPELINE` y `M5_WAREHOUSE`.
+1. **Kestra → Snowflake:** se comprueba al ejecutar `ingest_raw` (paso 7). Su primera tarea, `bronze_ddl`, se conecta con el usuario de servicio y crea los objetos de Bronze. Si termina en verde, la conexión y los permisos están bien.
 2. **dbt → Snowflake:**
    ```bash
    docker compose run --rm dbt debug
@@ -194,6 +194,21 @@ Hay dos flows en el namespace `m5.pipeline`:
 
 Re-ejecutar cualquiera de los dos flows no duplica datos.
 
+**Probar el manejo de errores.** `load_sales_week` tiene el input `simulate_failure`, que solo sirve para la demo. Por defecto vale `NONE`, así que el cron nunca lo activa. Ejecuta el flow con `week_idx = 100` y:
+
+| `simulate_failure` | Qué pasa |
+|---|---|
+| `TRANSIENT` | Falla el 1.er intento de `load_week` y el retry lo recupera: 2 intentos en el Gantt y ejecución en `SUCCESS`. |
+| `PERMANENT` | Fallan los 3 intentos. Corre el bloque `errors`: log de nivel ERROR y fila `FAILED` en `LOAD_LOG` con el mensaje de error. |
+
+La falla simulada ocurre después del `DELETE`. En ambos casos la semana sigue completa, porque la transacción se deshace:
+
+```sql
+SELECT COUNT(*) FROM M5.BRONZE.SALES WHERE week_idx = 100;   -- 213.430
+SELECT status, error_message, loaded_at FROM M5.BRONZE.LOAD_LOG
+WHERE week_idx = 100 ORDER BY loaded_at DESC LIMIT 3;
+```
+
 ---
 
 ## Uso diario
@@ -201,7 +216,7 @@ Re-ejecutar cualquiera de los dos flows no duplica datos.
 ### Kestra
 
 - Los flows viven en `kestra/` y **se sincronizan solos** con Kestra: al guardar un archivo, el cambio aparece en la UI.
-- **El nombre del archivo es obligatorio** y sigue el formato `<tenant>_<namespace>_<id>.yml`. En la versión open source el tenant es siempre `main`. Ejemplo: `main_m5.pipeline_snowflake_check.yml`. Con otro nombre, Kestra ignora el flow y deja un error de `tenantId` en los logs.
+- **El nombre del archivo es obligatorio** y sigue el formato `<tenant>_<namespace>_<id>.yml`. En la versión open source el tenant es siempre `main`. Ejemplo: `main_m5.pipeline_ingest_raw.yml`. Con otro nombre, Kestra ignora el flow y deja un error de `tenantId` en los logs.
 - Edita los flows en el repositorio, no en la UI, para que queden versionados.
 
 ### dbt
