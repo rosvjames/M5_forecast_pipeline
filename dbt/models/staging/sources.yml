@@ -1,0 +1,92 @@
+version: 2
+
+# Capa Bronze: tablas crudas que cargan los flows de Kestra (ingest_raw y load_sales_week).
+# dbt no las crea ni las modifica; solo las declara para poder referenciarlas con source().
+sources:
+  - name: bronze
+    database: M5
+    schema: BRONZE
+    description: "Datos crudos del M5 cargados por Kestra, sin transformar."
+
+    tables:
+      - name: sales
+        identifier: SALES
+        description: "Ventas diarias en formato largo: una fila por item × tienda × día. Se carga una semana por ejecución."
+        # Frescura: avisa si Kestra dejó de cargar semanas. 8 días = cron semanal + 1 día de margen.
+        # Tras la última semana del M5 (277) el aviso salta siempre: el dataset se acaba, no es falla.
+        loaded_at_field: _loaded_at
+        freshness:
+          warn_after: {count: 8, period: day}
+        data_tests:
+          - dbt_utils.unique_combination_of_columns:
+              combination_of_columns: [item_id, store_id, d] # Verifica duplicados en la combinación de item_id, store_id y d.
+        columns:
+          - name: id
+            description: "item_id || '_' || store_id || '_evaluation'"
+          - name: item_id
+            description: "Producto (FOODS_3_090, ...); parte de la llave natural"
+            data_tests:
+              - not_null
+          - name: store_id
+            description: "Tienda (CA_1, ...); parte de la llave natural"
+            data_tests:
+              - not_null
+          - name: d
+            description: "Día en formato d_N; llave hacia calendar.d"
+            data_tests:
+              - not_null
+              - relationships:
+                  to: source('bronze', 'calendar')
+                  field: d
+          - name: sales
+            description: "Unidades vendidas en el día"
+          - name: week_idx
+            description: "Índice de la semana simulada que cargó la fila"
+          - name: _batch_id
+            description: "Lote de carga; se cruza con load_log.batch_id"
+
+      - name: sell_prices
+        identifier: SELL_PRICES
+        description: "Precio semanal por item y tienda. Sin precio = el item aún no se lanzaba; después del lanzamiento el precio se arrastra aunque no haya ventas."
+        data_tests:
+          - dbt_utils.unique_combination_of_columns:
+              combination_of_columns: [store_id, item_id, wm_yr_wk] # Verifica duplicados en la combinación de store_id, item_id y wm_yr_wk.
+        columns:
+          - name: store_id
+            description: "Tienda; parte de la llave natural"
+            data_tests:
+              - not_null
+          - name: item_id
+            description: "Producto; parte de la llave natural"
+            data_tests:
+              - not_null
+          - name: wm_yr_wk
+            description: "Semana Walmart; llave hacia calendar.wm_yr_wk"
+            data_tests:
+              - not_null
+              - relationships:
+                  to: source('bronze', 'calendar')
+                  field: wm_yr_wk
+          - name: sell_price
+            description: "Precio promedio semanal en USD; no es precio de lista (centavos atípicos)"
+
+      - name: calendar
+        identifier: CALENDAR
+        description: "Dimensión de fechas con eventos y días SNAP por estado."
+        columns:
+          - name: d
+            description: "Día en formato d_N"
+            data_tests:
+              - not_null
+              - unique
+          - name: date
+            description: "Fecha calendario"
+            data_tests:
+              - not_null
+              - unique
+          - name: event_name_1
+            description: "Evento del día; nulo la mayor parte del tiempo"
+
+      - name: load_log
+        identifier: LOAD_LOG
+        description: "Bitácora de cargas de Kestra: una fila por lote y tabla, con estado y filas cargadas."

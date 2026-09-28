@@ -76,11 +76,16 @@ Tareas:
 - [x] Trigger semanal (cron) + backfill ejecutado y verificado (conteo de filas por semana). Semanas 0–276 OK (59.120.110 filas, SUM 66.821.317); la 277 llega con el cron del 3-oct.
 - [x] Probar un fallo a propósito para mostrar el retry. Input `simulate_failure` (TRANSIENT → 2 intentos y SUCCESS; PERMANENT → 3 intentos, bloque `errors` y fila FAILED en LOAD_LOG). Semana 100 sigue con 213.430 filas.
 - [x] Probar la idempotencia: re-ejecutar una semana y verificar que el conteo no cambia.
+- [ ] **Sáb 3-oct:** confirmar que el tick del cron cargó la semana 277 (Mac y Docker encendidos; si no, `recoverMissedSchedules` la corre al volver). Verificar 59.181.090 filas y SUM 66.927.173, y guardar captura de esa ejecución (sin label `backfill`) para el documento.
 
 **Listo cuando:** Bronze tiene 59.181.090 filas de ventas, 6.841.121 de precios y 1.969 de calendario, sin cargas manuales.
 
 ## Fase 2 — Calidad de datos (20 %, la más pesada)
 
+**Decisión (27-sep):** Bronze se testea solo como contrato de ingesta: unicidad de llaves naturales, `not_null` en las llaves y `relationships` de `d` y `wm_yr_wk` hacia calendar. La calidad del contenido se mide con analyses (`dbt/analyses/dq_0*.sql`) y se corrige con flags y tests en Silver y Gold (`accepted_values`, rangos, reglas de negocio).
+
+- [x] `sources.yml` sobre `BRONZE` (4 tablas, freshness en `sales`).
+- [x] `packages.yml` con `dbt_utils` y tests de contrato en los sources. `dbt test -s source:bronze`: 14/14 PASS (27-sep, 12,6 s).
 - [ ] Recalcular en Snowflake (SQL sobre Bronze) las métricas del EDA: completitud, precisión, consistencia, validez. Las cifras de referencia están en `eda/reports/01`–`04`.
 - [ ] Tabla Problema | Evidencia | Acción | Justificación (base: `enfoque_proyecto.md`, sección 8).
 - [ ] Cada decisión con métrica concreta (ej. "20,9 % de los días-serie son previos al lanzamiento").
