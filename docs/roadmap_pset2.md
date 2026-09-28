@@ -20,7 +20,7 @@ Modo de trabajo: James implementa; Claude guía, revisa y explica. Marcar `[x]` 
 |---|---|
 | 0 · Infraestructura (PDF §1) | ✅ Docker Compose con Kestra, Spark y dbt, conectado a Snowflake. Falta el diagrama. |
 | 1 · Ingesta Kestra → Bronze (PDF §2) | 🔄 `CALENDAR` y `SELL_PRICES` completas. `SALES` con backfill de las semanas 0–276; la 277 entra con el cron del 3-oct. Bloque `errors` y demo del retry listos. |
-| 2 · Calidad (PDF §3) | ⬜ Las cifras ya están en el EDA (`eda/reports/`). Falta recalcularlas en SQL sobre Bronze. |
+| 2 · Calidad (PDF §3) | ✅ 14 tests de contrato en Bronze, 4 analyses (`dbt/analyses/dq_0*`) y tabla de decisiones en `docs/calidad_datos.md`. Los flags se implementan en Silver. |
 | 3 · dbt Silver | ⬜ |
 | 4 · dbt Gold (star schema) | ⬜ |
 | 5 · Spark → OBT | ⬜ |
@@ -36,8 +36,8 @@ Modo de trabajo: James implementa; Claude guía, revisa y explica. Marcar `[x]` 
 
 | Tarea | Fase | Depende de | Responsable |
 |---|---|---|---|
-| Consultas de calidad sobre Bronze (completitud, precisión, consistencia y validez), comparadas con las cifras de `eda/reports/01`–`04`. Guardarlas en `dbt/analyses/`. | 2 | Nada: Bronze ya tiene datos | |
-| `sources.yml` sobre `BRONZE` y los modelos `stg_calendar` y `stg_sell_prices`. Borrar `dbt/models/example/`. | 3 | Nada | |
+| ~~Consultas de calidad sobre Bronze~~ ✅ hecho (`dbt/analyses/dq_0*`, `docs/calidad_datos.md`) | 2 | — | James |
+| Modelos `stg_calendar` y `stg_sell_prices` (`sources.yml` ya está listo) | 3 | Nada | |
 | `stg_sales` (join a calendar por `d`) y los flags de limpieza de `enfoque_proyecto.md` §8 | 3 | `stg_calendar` | |
 | Conector Spark–Snowflake: jars en la imagen o en `spark/`, y una prueba que lea `BRONZE.CALENDAR` desde Spark | 5 | Nada | |
 | Diagrama de arquitectura y sección *Batch vs. streaming* del documento | 6 | Nada | |
@@ -86,9 +86,10 @@ Tareas:
 
 - [x] `sources.yml` sobre `BRONZE` (4 tablas, freshness en `sales`).
 - [x] `packages.yml` con `dbt_utils` y tests de contrato en los sources. `dbt test -s source:bronze`: 14/14 PASS (27-sep, 12,6 s).
-- [ ] Recalcular en Snowflake (SQL sobre Bronze) las métricas del EDA: completitud, precisión, consistencia, validez. Las cifras de referencia están en `eda/reports/01`–`04`.
-- [ ] Tabla Problema | Evidencia | Acción | Justificación (base: `enfoque_proyecto.md`, sección 8).
-- [ ] Cada decisión con métrica concreta (ej. "20,9 % de los días-serie son previos al lanzamiento").
+- [x] Recalcular en Snowflake (SQL sobre Bronze) las métricas del EDA: completitud, precisión, consistencia, validez. `dbt/analyses/dq_01`–`dq_04`, todas < 15 s.
+- [x] Tabla Problema | Evidencia | Acción | Justificación: `docs/calidad_datos.md`.
+- [x] Cada decisión con métrica concreta (ej. "20,8 % de los días-serie son previos al lanzamiento").
+- [ ] Cada acción con su modelo o test en dbt: se completa en las Fases 3 y 4 (flags de `docs/calidad_datos.md`).
 
 **Listo cuando:** la tabla está completa y cada acción tiene su modelo o test en dbt.
 
