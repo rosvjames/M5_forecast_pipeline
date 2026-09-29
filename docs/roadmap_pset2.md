@@ -12,25 +12,32 @@ Modo de trabajo: James implementa; Claude guía, revisa y explica. Marcar `[x]` 
 
 ---
 
+## ▶ Retomar aquí (29-sep)
+
+Backfill v2 verificado el 29-sep: 277/277 ejecuciones en SUCCESS, `SALES_RAW` con 8.445.730 filas, `stg_sales` con 59.120.110 filas y SUM 66.821.317, 23/23 tests en verde y `dq_01`–`dq_04` sin cambios. `BRONZE.SALES` (v1) eliminada. Docs actualizados.
+
+1. Seguir con la Fase 3 (Silver): `stg_calendar`, `stg_sell_prices`, modelo con fecha + flags de calidad.
+2. **Sáb 3-oct:** confirmar la semana 277 (ver Fase 1).
+
 ## Estado actual y cómo sumarse
 
-*Actualizado: 27-sep-2026.*
+*Actualizado: 29-sep-2026.*
 
 | Fase (PDF) | Estado |
 |---|---|
 | 0 · Infraestructura (PDF §1) | ✅ Docker Compose con Kestra, Spark y dbt, conectado a Snowflake. Falta el diagrama. |
-| 1 · Ingesta Kestra → Bronze (PDF §2) | 🔄 `CALENDAR` y `SELL_PRICES` completas. `SALES` con backfill de las semanas 0–276; la 277 entra con el cron del 3-oct. Bloque `errors` y demo del retry listos. |
-| 2 · Calidad (PDF §3) | ✅ 14 tests de contrato en Bronze, 4 analyses (`dbt/analyses/dq_0*`) y tabla de decisiones en `docs/calidad_datos.md`. Los flags se implementan en Silver. |
+| 1 · Ingesta Kestra → Bronze (PDF §2) | ✅ Rediseñada (v2, 28-sep): Bronze guarda las entregas semanales tal cual (`SALES_RAW`, formato ancho, carga por nombre de columna). Backfill v2 terminado y verificado (29-sep). Falta la 277, que entra con el cron del 3-oct. |
+| 2 · Calidad (PDF §3) | ✅ Tests de contrato en Bronze y de unpivot en `stg_sales`, 4 analyses (`dbt/analyses/dq_0*`) y tabla de decisiones en `docs/calidad_datos.md`. Los flags se implementan en Silver. |
 | 3 · dbt Silver | ⬜ |
 | 4 · dbt Gold (star schema) | ⬜ |
 | 5 · Spark → OBT | ⬜ |
 | 6 · Documento y README | ⬜ README al día hasta la ingesta. |
 
-**Qué hay en Snowflake (`M5.BRONZE`):**
-- `CALENDAR`, `SELL_PRICES` y `SALES` con los valores originales de Kaggle, más `_source_file`, `_batch_id` y `_loaded_at`.
-- `SALES` está en formato largo: una fila por `item_id` × `store_id` × `d`, con `d` como texto (`'d_1'`) y sin fecha. El join con calendar se hace en Silver.
-- `LOAD_LOG` guarda la auditoría de cargas.
-- En `@RAW_STAGE/m5/` están los CSV originales intactos.
+**Qué hay en Snowflake:**
+- `BRONZE.CALENDAR` y `BRONZE.SELL_PRICES`: valores originales de Kaggle cargados por nombre de columna, más `_source_file`, `_batch_id` y `_loaded_at`.
+- `BRONZE.SALES_RAW`: entregas semanales de ventas tal como las publica la fuente (formato ancho: jerarquía + columnas `D_N`, que crea schema evolution; una fila por serie y entrega) + `week_idx`, `_source_file`, `_source_row`, `_batch_id`, `_loaded_at`.
+- `SILVER.stg_sales` (dbt, incremental): las ventas en formato largo, una fila por `item_id` × `store_id` × `d`.
+- `LOAD_LOG` guarda la auditoría de cargas. En `@RAW_STAGE/m5/` están los CSV de Kaggle y en `@RAW_STAGE/m5/sales_weekly/` las entregas semanales.
 
 **Tareas que se pueden adelantar sin bloquear la ingesta.** Anota tu nombre en la tarea antes de empezar, para no duplicar trabajo.
 
@@ -38,13 +45,13 @@ Modo de trabajo: James implementa; Claude guía, revisa y explica. Marcar `[x]` 
 |---|---|---|---|
 | ~~Consultas de calidad sobre Bronze~~ ✅ hecho (`dbt/analyses/dq_0*`, `docs/calidad_datos.md`) | 2 | — | James |
 | Modelos `stg_calendar` y `stg_sell_prices` (`sources.yml` ya está listo) | 3 | Nada | |
-| `stg_sales` (join a calendar por `d`) y los flags de limpieza de `enfoque_proyecto.md` §8 | 3 | `stg_calendar` | |
+| Modelo Silver con fecha (join `stg_sales` → calendar) y los flags de limpieza de `calidad_datos.md` (`stg_sales` ya existe) | 3 | `stg_calendar` | |
 | Conector Spark–Snowflake: jars en la imagen o en `spark/`, y una prueba que lea `BRONZE.CALENDAR` desde Spark | 5 | Nada | |
 | Diagrama de arquitectura y sección *Batch vs. streaming* del documento | 6 | Nada | |
 
 **Reglas para trabajar en paralelo:**
 - Una rama por tarea y PR a `main`. No edites `kestra/` sin avisar: los flows están corriendo.
-- Snowflake: pendiente decidir si cada uno usa su propia cuenta trial (el README reproduce todo desde cero, con ~35 min de backfill) o si se crean usuarios en la cuenta compartida. **Nadie** usa el usuario de servicio `M5_PIPELINE_USER` con una llave copiada.
+- Snowflake: pendiente decidir si cada uno usa su propia cuenta trial (el README reproduce todo desde cero, con ~2 h 45 min de backfill) o si se crean usuarios en la cuenta compartida. **Nadie** usa el usuario de servicio `M5_PIPELINE_USER` con una llave copiada.
 - Los modelos dbt leen de `source('bronze', ...)`, nunca con nombres de tabla escritos a mano.
 
 ---
@@ -62,6 +69,16 @@ Modo de trabajo: James implementa; Claude guía, revisa y explica. Marcar `[x]` 
 
 ## Fase 1 — Ingesta con Kestra → Bronze (15 %)
 
+**Decisión revisada (28-sep, tras feedback del profesor): v2 implementada.** La v1 hacía el `UNPIVOT` en la ingesta y leía columnas por posición (`$n`): si la fuente cambiaba de formato, corrompía datos sin avisar. Ahora:
+- **Simulador de fuente** (`publish_week`): un *unload* en Snowflake (`COPY INTO @stage`, `HEADER = TRUE`) publica cada semana un CSV **ancho** con la jerarquía + `d_(7k+1)..d_(7k+7)` en `@RAW_STAGE/m5/sales_weekly/sales_wk_<k>.csv.gz` (~2 s). Lee por posición porque hace de fuente y conoce su formato. (Primero fue Python con descarga del archivo, ~17 s; se reemplazó a mitad del backfill tras verificar que produce el mismo archivo línea por línea.)
+- **Ingesta** (`load_week`): una transacción con `DELETE week_idx = k` → `COPY` a `BRONZE.SALES_RAW` con `PARSE_HEADER`, `MATCH_BY_COLUMN_NAME` e `INCLUDE_METADATA` (tabla con `ENABLE_SCHEMA_EVOLUTION`) → `UPDATE` de `week_idx`, `_batch_id` y `_loaded_at` → `LOAD_LOG`. No nombra ninguna columna de ventas.
+- **Silver** (`stg_sales`): `OBJECT_CONSTRUCT(*)` + `FLATTEN` (unpivot por nombre, ~3× más rápido que `UNPIVOT` y sin lista de columnas), incremental `delete+insert` por `week_idx`. Test `assert_stg_sales_weeks_complete` para que no se pierdan celdas.
+- `calendar` y `sell_prices` también se cargan con `MATCH_BY_COLUMN_NAME`.
+- **Bug encontrado y corregido:** `MATCH_BY_COLUMN_NAME` no aplica `DEFAULT` → `_loaded_at` quedaba NULL. El `UPDATE` post-`COPY` ahora lo fija; las filas ya cargadas se completaron una vez con la hora real de `LOAD_LOG` (cruce por `_batch_id`).
+- **No subir `concurrency`:** el `UPDATE ... WHERE week_idx IS NULL` supone una sola carga a la vez.
+- Mejora posible (no aplicada): derivar `week_idx` de `_source_file` para evitar el `UPDATE`; `load_week` pasa de ~8 s a ~16–25 s a medida que la tabla crece.
+- Por qué la tabla ancha y dispersa: M5 publica un archivo que crece una columna por día. Con una fuente real en formato largo, Bronze sería un append de filas.
+
 Conceptos a decidir y poder explicar:
 - **Bronze conserva el dato original:** CSV crudos en un stage de Snowflake (inmutables) + tablas Bronze con los valores sin alterar y metadatos de carga (`_loaded_at`, `_source_file`, `_batch_id`).
 - **Reloj simulado:** M5 es estático. Cada ejecución semanal del trigger se mapea a una semana de M5 (fecha de ejecución − fecha ancla → índice de semana → rango d_). Ancla = 2021-06-12 (sábado). Hay 278 semanas (k = 0..277) y la 277 solo tiene 2 días.
@@ -72,13 +89,14 @@ Conceptos a decidir y poder explicar:
 
 Tareas:
 - [x] Flow 1: descarga desde Kaggle (API) → stage de Snowflake. `calendar` y `sell_prices` como carga completa (son chicos) o precios por `wm_yr_wk`.
-- [x] Flow 2: carga semanal de ventas a Bronze (formato largo con valores originales, un lote por semana).
-- [x] Trigger semanal (cron) + backfill ejecutado y verificado (conteo de filas por semana). Semanas 0–276 OK (59.120.110 filas, SUM 66.821.317); la 277 llega con el cron del 3-oct.
+- [x] Flow 2: carga semanal de ventas a Bronze, un lote por semana (v1 en formato largo; reemplazada por v2, ver arriba).
+- [x] Trigger semanal (cron) + backfill v1 ejecutado y verificado (59.120.110 filas, SUM 66.821.317).
+- [x] Backfill v2 (`SALES_RAW`) terminado y verificado (29-sep): 277 ejecuciones en SUCCESS (label `backfill: v2-sales-raw`, 2 h 44 min, mediana 28 s por semana); 8.445.730 filas, 30.490 por semana, un lote por semana, 0 `_loaded_at` NULL; `stg_sales` con 59.120.110 filas y SUM 66.821.317, 23/23 tests PASS; `dq_01`–`dq_04` idénticas. `BRONZE.SALES` (v1) eliminada. Retry, `errors` e idempotencia re-probados con v2 (semanas 1, 2 y 10).
 - [x] Probar un fallo a propósito para mostrar el retry. Input `simulate_failure` (TRANSIENT → 2 intentos y SUCCESS; PERMANENT → 3 intentos, bloque `errors` y fila FAILED en LOAD_LOG). Semana 100 sigue con 213.430 filas.
 - [x] Probar la idempotencia: re-ejecutar una semana y verificar que el conteo no cambia.
-- [ ] **Sáb 3-oct:** confirmar que el tick del cron cargó la semana 277 (Mac y Docker encendidos; si no, `recoverMissedSchedules` la corre al volver). Verificar 59.181.090 filas y SUM 66.927.173, y guardar captura de esa ejecución (sin label `backfill`) para el documento.
+- [ ] **Sáb 3-oct:** confirmar que el tick del cron cargó la semana 277 (Mac y Docker encendidos; si no, `recoverMissedSchedules` la corre al volver). Verificar `SALES_RAW` con 8.476.220 filas y, tras `dbt build -s stg_sales+`, `stg_sales` con 59.181.090 filas y SUM 66.927.173. Guardar captura de esa ejecución (sin label `backfill`) para el documento.
 
-**Listo cuando:** Bronze tiene 59.181.090 filas de ventas, 6.841.121 de precios y 1.969 de calendario, sin cargas manuales.
+**Listo cuando:** Bronze tiene las 278 entregas de ventas (8.476.220 filas en `SALES_RAW` → 59.181.090 en `stg_sales`), 6.841.121 de precios y 1.969 de calendario, sin cargas manuales.
 
 ## Fase 2 — Calidad de datos (20 %, la más pesada)
 
@@ -129,6 +147,12 @@ Tareas:
 - [ ] Batch vs streaming: M5 es diario/histórico y la decisión (reposición semanal) tolera latencia de días. Streaming solo se justificaría con reposición intradía, inventario en tiempo real o alertas de quiebre.
 - [ ] README: cómo levantar la infraestructura y ejecutar Kestra, dbt y Spark paso a paso. Probarlo desde cero.
 - [ ] Nombre del archivo: `PSet2_memo_<apellido_1>_<apellido_2>.pdf`.
+
+**Decisiones revisadas (contar en la sección Ingesta y en Limitaciones):**
+- **Ingesta v1 → v2 (28-sep, feedback de Erick).** v1 hacía el `UNPIVOT` en la ingesta y leía las columnas por posición (`$n`): un cambio de formato en la fuente habría corrompido datos sin error. v2 guarda la entrega tal cual en `SALES_RAW` (formato ancho, `COPY` por nombre de columna, schema evolution) y hace el unpivot en dbt (`stg_sales`). Se validó que v2 reproduce v1: mismas 59.120.110 filas, mismo SUM y mismas cifras de calidad.
+- **Costo de v2:** el backfill pasó de ~35 min (v1, ~6 s por semana) a ~2 h 45 min (mediana 28 s por semana), porque el `UPDATE` post-`COPY` recorre una tabla que crece. Mejora posible: derivar `week_idx` de `_source_file` y evitar el `UPDATE`.
+- **Gotchas que vale la pena mencionar:** `MATCH_BY_COLUMN_NAME` no aplica los `DEFAULT` (por eso `_loaded_at` se fija en el `UPDATE`), y la carga supone `concurrency: 1`.
+- **Tabla ancha y dispersa:** es consecuencia de cómo publica M5 (un archivo que crece una columna por día). Con una fuente real en formato largo, Bronze sería un append de filas.
 
 ---
 

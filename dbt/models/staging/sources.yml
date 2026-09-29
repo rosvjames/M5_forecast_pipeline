@@ -9,17 +9,22 @@ sources:
     description: "Datos crudos del M5 cargados por Kestra, sin transformar."
 
     tables:
-      - name: sales
-        identifier: SALES
-        description: "Ventas diarias en formato largo: una fila por item × tienda × día. Se carga una semana por ejecución."
+      - name: sales_raw
+        identifier: SALES_RAW
+        description: >
+          Entregas semanales de ventas tal como las publica la fuente: formato ancho, una fila por serie
+          (item × tienda) y entrega. Cada entrega trae sus 7 columnas D_N; las de otras semanas quedan NULL.
+          Las columnas D_N las crea Snowflake al cargar (schema evolution), por eso no se declaran aquí.
+          Append-only: el paso a formato largo se hace en stg_sales.
         # Frescura: avisa si Kestra dejó de cargar semanas. 8 días = cron semanal + 1 día de margen.
         # Tras la última semana del M5 (277) el aviso salta siempre: el dataset se acaba, no es falla.
         loaded_at_field: _loaded_at
         freshness:
           warn_after: {count: 8, period: day}
         data_tests:
+          # Contrato de ingesta: una fila por serie en cada entrega. Un duplicado indicaría una carga repetida.
           - dbt_utils.unique_combination_of_columns:
-              combination_of_columns: [item_id, store_id, d] # Verifica duplicados en la combinación de item_id, store_id y d.
+              combination_of_columns: [item_id, store_id, week_idx]
         columns:
           - name: id
             description: "item_id || '_' || store_id || '_evaluation'"
@@ -31,19 +36,14 @@ sources:
             description: "Tienda (CA_1, ...); parte de la llave natural"
             data_tests:
               - not_null
-          - name: d
-            description: "Día en formato d_N; llave hacia calendar.d"
+          - name: week_idx
+            description: "Semana simulada de la entrega (0..277); la completa load_week tras el COPY"
             data_tests:
               - not_null
-              - relationships:
-                  to: source('bronze', 'calendar')
-                  field: d
-          - name: sales
-            description: "Unidades vendidas en el día"
-          - name: week_idx
-            description: "Índice de la semana simulada que cargó la fila"
+          - name: _source_file
+            description: "Archivo de la zona de entrega: m5/sales_weekly/sales_wk_<k>.csv.gz"
           - name: _batch_id
-            description: "Lote de carga; se cruza con load_log.batch_id"
+            description: "Ejecución de Kestra que cargó la fila; se cruza con load_log.batch_id"
 
       - name: sell_prices
         identifier: SELL_PRICES

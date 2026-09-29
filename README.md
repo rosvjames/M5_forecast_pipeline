@@ -13,7 +13,7 @@ Kaggle → Kestra → BRONZE → dbt → SILVER → dbt → GOLD → Spark → O
 
 El enfoque del proyecto y las decisiones de diseño están en [`docs/enfoque_proyecto.md`](docs/enfoque_proyecto.md). El avance por fases está en [`docs/roadmap_pset2.md`](docs/roadmap_pset2.md).
 
-> **Estado actual (27-sep-2026):** infraestructura lista e ingesta a Bronze casi completa. `CALENDAR` y `SELL_PRICES` están cargadas, y `SALES` tiene el backfill de las semanas 0–276. La semana 277 entra con el cron del sábado 3-oct. El retry y el bloque `errors` ya están demostrados. Silver, Gold, OBT y el documento están pendientes. Qué hay hecho y en qué se puede ayudar: [`docs/roadmap_pset2.md`](docs/roadmap_pset2.md#estado-actual-y-cómo-sumarse).
+> **Estado actual (29-sep-2026):** infraestructura lista e ingesta a Bronze completa hasta la semana 276. `CALENDAR` y `SELL_PRICES` están cargadas, y `SALES_RAW` tiene las entregas semanales 0–276, que `SILVER.stg_sales` (dbt) pasa a formato largo. La semana 277 entra con el cron del sábado 3-oct. El retry y el bloque `errors` ya están demostrados, y el diagnóstico de calidad está en [`docs/calidad_datos.md`](docs/calidad_datos.md). El resto de Silver, Gold, la OBT y el documento están pendientes. Qué hay hecho y en qué se puede ayudar: [`docs/roadmap_pset2.md`](docs/roadmap_pset2.md#estado-actual-y-cómo-sumarse).
 
 ---
 
@@ -168,7 +168,7 @@ Hay dos flows en el namespace `m5.pipeline`:
 | Flow | Qué hace | Cuándo corre |
 |---|---|---|
 | `ingest_raw` | Crea los objetos de Bronze (idempotente), descarga M5 desde la API de Kaggle, sube los 3 CSV al stage `@M5.BRONZE.RAW_STAGE/m5/` y hace carga completa de `CALENDAR` y `SELL_PRICES` | Una vez, a mano (**Execute** en la UI) |
-| `load_sales_week` | Carga **una semana** de ventas en `SALES` (formato largo, valores originales), en una transacción `DELETE` + `INSERT` por `week_idx` | Trigger `weekly`, sábados 06:00 UTC, más el backfill |
+| `load_sales_week` | Simula la entrega semanal de la fuente (`publish_week`: CSV ancho en `@RAW_STAGE/m5/sales_weekly/`) y la carga tal cual en `SALES_RAW` (`load_week`: `COPY` por nombre de columna), en una transacción `DELETE` + `COPY` por `week_idx` | Trigger `weekly`, sábados 06:00 UTC, más el backfill |
 
 **Reloj simulado.** M5 es estático, así que cada ejecución semanal se asigna a una semana de M5: `k = semanas completas entre el ancla (2021-06-12) y la fecha del trigger`. La semana `k` carga `d_(7k+1)` … `d_min(7k+7, 1941)`, de modo que hay 278 semanas (0–277). Fuera de ese rango el flow no carga nada. Para cargar una semana concreta a mano, ejecuta el flow con el input `week_idx`.
 
@@ -178,19 +178,28 @@ Hay dos flows en el namespace `m5.pipeline`:
 2. En `load_sales_week` → **Triggers** → `weekly` → **Backfill executions**:
    - Inicio: `2021-06-12 00:00`. Fin: ahora.
    - `week_idx`: **vacío**.
-   - En *Other properties*, pon el label `load_type` = `backfill`. Si la fila de label queda vacía, la UI da error.
+   - En *Other properties*, pon un label, por ejemplo `backfill` = `v2-sales-raw`. Si la fila de label queda vacía, la UI da error.
 
-   Corren de a una (~6 s cada una, ~35 min en total). No dejes que el equipo entre en reposo mientras corre (en macOS: `caffeinate -i -t 2700`).
-3. Verifica en Snowflake:
+   Corren de a una (mediana ~28 s por semana, ~2 h 45 min en total; cada carga se hace más lenta a medida que crece `SALES_RAW`). No dejes que el equipo entre en reposo mientras corre (en macOS: `caffeinate -i -t 10800`).
+3. Verifica Bronze en Snowflake:
    ```sql
    SELECT COUNT(*) FROM M5.BRONZE.CALENDAR;       -- 1.969
    SELECT COUNT(*) FROM M5.BRONZE.SELL_PRICES;    -- 6.841.121
-   SELECT COUNT(*), COUNT(DISTINCT week_idx), MIN(week_idx), MAX(week_idx), SUM(sales)
-   FROM M5.BRONZE.SALES;
-   -- Con el backfill hasta hoy: 59.120.110 | 277 | 0 | 276 | 66.821.317
-   -- Con las 278 semanas:      59.181.090 | 278 | 0 | 277 | 66.927.173
+   SELECT COUNT(*), COUNT(DISTINCT week_idx), MIN(week_idx), MAX(week_idx), COUNT_IF(_loaded_at IS NULL)
+   FROM M5.BRONZE.SALES_RAW;
+   -- Con el backfill hasta hoy: 8.445.730 | 277 | 0 | 276 | 0   (30.490 series por semana)
+   -- Con las 278 semanas:      8.476.220 | 278 | 0 | 277 | 0
    ```
    `M5.BRONZE.LOAD_LOG` guarda una fila por carga (ejecución, tabla, semana, filas y estado).
+4. Cuando el backfill haya terminado, pasa las ventas a formato largo con dbt (~2 min la primera vez):
+   ```bash
+   docker compose run --rm dbt build -s stg_sales+ source:bronze
+   ```
+   ```sql
+   SELECT COUNT(*), SUM(sales) FROM M5.SILVER.STG_SALES;
+   -- Con el backfill hasta hoy: 59.120.110 | 66.821.317
+   -- Con las 278 semanas:      59.181.090 | 66.927.173
+   ```
 
 Re-ejecutar cualquiera de los dos flows no duplica datos.
 
@@ -204,7 +213,7 @@ Re-ejecutar cualquiera de los dos flows no duplica datos.
 La falla simulada ocurre después del `DELETE`. En ambos casos la semana sigue completa, porque la transacción se deshace:
 
 ```sql
-SELECT COUNT(*) FROM M5.BRONZE.SALES WHERE week_idx = 100;   -- 213.430
+SELECT COUNT(*) FROM M5.BRONZE.SALES_RAW WHERE week_idx = 100;   -- 30.490
 SELECT status, error_message, loaded_at FROM M5.BRONZE.LOAD_LOG
 WHERE week_idx = 100 ORDER BY loaded_at DESC LIMIT 3;
 ```
@@ -263,6 +272,8 @@ docker compose down -v     # además BORRA los volúmenes: historial de Kestra y
 | Error de volumen en el servicio `dbt` al arrancar | `SNOWFLAKE_PRIVATE_KEY_PATH` está vacío o no es una ruta absoluta. |
 | Una tarea `Queries` falla con `Actual statement count N did not match the desired statement count 1` (en la UI se ve como `Connection is closed`) | El driver de Snowflake acepta una sola sentencia por llamada. La URL JDBC de los flows lleva `?MULTI_STATEMENT_COUNT=0`. No lo quites. |
 | El backfill falla con `Backfill["labels"] … key: null, value: null` | Quedó una fila de label vacía en *Other properties*. Llénala o bórrala. |
+| `assert_stg_sales_weeks_complete` falla | Se corrió dbt mientras el backfill seguía cargando semanas. Espera a que termine y vuelve a correr `dbt build -s stg_sales+`. |
+| Semanas mezcladas o `week_idx` NULL en `SALES_RAW` | Se subió `concurrency` en `load_sales_week`. El `UPDATE ... WHERE week_idx IS NULL` supone una sola carga a la vez: déjalo en `limit: 1`. |
 | dbt va lento en Mac con chip Apple | La imagen de dbt es solo `amd64` y corre emulada (`platform: linux/amd64`). Es esperado. |
 
 ## Seguridad

@@ -5,7 +5,7 @@
 with series as (
     -- La jerarquía se repite en cada día; basta revisarla una vez por serie.
     select distinct id, item_id, dept_id, cat_id, store_id, state_id
-    from {{ source('bronze', 'sales') }}
+    from {{ ref('stg_sales') }}
 ),
 
 price_pairs as (

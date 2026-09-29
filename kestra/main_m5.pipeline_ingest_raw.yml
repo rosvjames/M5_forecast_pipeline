@@ -1,6 +1,6 @@
 id: ingest_raw
 namespace: m5.pipeline
-description: Flow 1. Crea los objetos de Bronze (idempotente), descarga M5 desde Kaggle al stage y hace full refresh de CALENDAR y SELL_PRICES.
+description: Flow 1. Crea los objetos de Bronze (idempotente), descarga M5 desde Kaggle al stage y hace full refresh de CALENDAR y SELL_PRICES (lectura por nombre de columna).
 
 pluginDefaults:
   - type: io.kestra.plugin.jdbc.snowflake
@@ -24,6 +24,17 @@ tasks:
 
       CREATE STAGE IF NOT EXISTS M5.BRONZE.RAW_STAGE
         FILE_FORMAT = M5.BRONZE.CSV_M5;
+
+      -- Lectura por NOMBRE de columna (encabezado), no por posición: si la fuente reordena o agrega columnas,
+      -- cada valor sigue llegando a su columna. Lo usan todos los COPY con MATCH_BY_COLUMN_NAME.
+      -- ERROR_ON_COLUMN_COUNT_MISMATCH = FALSE: el archivo puede traer menos columnas que la tabla
+      -- (cada entrega semanal de ventas trae solo sus 7 días) o columnas extra (se ignoran).
+      CREATE FILE FORMAT IF NOT EXISTS M5.BRONZE.CSV_M5_HEADER
+        TYPE = CSV
+        PARSE_HEADER = TRUE
+        FIELD_OPTIONALLY_ENCLOSED_BY = '"'
+        EMPTY_FIELD_AS_NULL = TRUE
+        ERROR_ON_COLUMN_COUNT_MISMATCH = FALSE;
 
       CREATE TABLE IF NOT EXISTS M5.BRONZE.CALENDAR (
         date         DATE,
@@ -55,21 +66,23 @@ tasks:
         _loaded_at   TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
       );
 
-      CREATE TABLE IF NOT EXISTS M5.BRONZE.SALES (
+      -- Ventas tal como las entrega la fuente (formato ancho, una fila por serie y entrega semanal).
+      -- Solo se declaran la jerarquía y los metadatos: las columnas d_N las agrega Snowflake al cargar
+      -- cada semana (ENABLE_SCHEMA_EVOLUTION), con el nombre que trae el encabezado del archivo.
+      -- Append-only: nunca se actualiza una fila de otra entrega. El unpivot a formato largo se hace en Silver (dbt).
+      CREATE TABLE IF NOT EXISTS M5.BRONZE.SALES_RAW (
         id           VARCHAR,
         item_id      VARCHAR,
         dept_id      VARCHAR,
         cat_id       VARCHAR,
         store_id     VARCHAR,
         state_id     VARCHAR,
-        d            VARCHAR,
-        sales        NUMBER(38,0),
         week_idx     NUMBER(38,0),
-        _source_row  NUMBER(38,0),
         _source_file VARCHAR,
+        _source_row  NUMBER(38,0),
         _batch_id    VARCHAR,
         _loaded_at   TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
-      );
+      ) ENABLE_SCHEMA_EVOLUTION = TRUE;
 
       CREATE TABLE IF NOT EXISTS M5.BRONZE.LOAD_LOG (
         batch_id    VARCHAR,
@@ -135,25 +148,24 @@ tasks:
   # FORCE = TRUE: el historial de carga (64 días) haría que el COPY cargue 0 filas al re-ejecutar;
   #   cada ejecución es un reemplazo completo a propósito, así que forzamos la recarga.
   # ON_ERROR = ABORT_STATEMENT: en Bronze preferimos fallar de forma visible antes que saltar filas en silencio.
+  # MATCH_BY_COLUMN_NAME: cada columna se carga por el nombre del encabezado, no por posición ($1, $2...).
+  #   Si la fuente reordena columnas, no cambia nada; si deja de mandar una, llega NULL y lo detectan los tests de dbt.
   - id: load_calendar
     type: io.kestra.plugin.jdbc.snowflake.Queries
     sql: |
       DELETE FROM M5.BRONZE.CALENDAR;
 
-      COPY INTO M5.BRONZE.CALENDAR (
-        date, wm_yr_wk, weekday, wday, month, year, d,
-        event_name_1, event_type_1, event_name_2, event_type_2,
-        snap_CA, snap_TX, snap_WI,
-        _source_file, _batch_id
-      )
-      FROM (
-        SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-               METADATA$FILENAME, '{{ execution.id }}'
-        FROM @M5.BRONZE.RAW_STAGE/m5/calendar.csv.gz
-      )
-      FILE_FORMAT = (FORMAT_NAME = 'M5.BRONZE.CSV_M5')
+      COPY INTO M5.BRONZE.CALENDAR
+      FROM @M5.BRONZE.RAW_STAGE/m5/calendar.csv.gz
+      FILE_FORMAT = (FORMAT_NAME = 'M5.BRONZE.CSV_M5_HEADER')
+      MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE
+      INCLUDE_METADATA = (_source_file = METADATA$FILENAME)
       ON_ERROR = ABORT_STATEMENT
       FORCE = TRUE;
+
+      -- MATCH_BY_COLUMN_NAME no admite constantes ni aplica DEFAULT: el lote y la hora de carga se marcan después,
+      -- dentro de la misma transacción.
+      UPDATE M5.BRONZE.CALENDAR SET _batch_id = '{{ execution.id }}', _loaded_at = CURRENT_TIMESTAMP() WHERE _batch_id IS NULL;
 
       INSERT INTO M5.BRONZE.LOAD_LOG (batch_id, flow_id, table_name, rows_loaded, status)
       SELECT '{{ execution.id }}', '{{ flow.id }}', 'CALENDAR', COUNT(*), 'SUCCESS'
@@ -169,18 +181,15 @@ tasks:
     sql: |
       DELETE FROM M5.BRONZE.SELL_PRICES;
 
-      COPY INTO M5.BRONZE.SELL_PRICES (
-        store_id, item_id, wm_yr_wk, sell_price,
-        _source_file, _batch_id
-      )
-      FROM (
-        SELECT $1, $2, $3, $4,
-               METADATA$FILENAME, '{{ execution.id }}'
-        FROM @M5.BRONZE.RAW_STAGE/m5/sell_prices.csv.gz
-      )
-      FILE_FORMAT = (FORMAT_NAME = 'M5.BRONZE.CSV_M5')
+      COPY INTO M5.BRONZE.SELL_PRICES
+      FROM @M5.BRONZE.RAW_STAGE/m5/sell_prices.csv.gz
+      FILE_FORMAT = (FORMAT_NAME = 'M5.BRONZE.CSV_M5_HEADER')
+      MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE
+      INCLUDE_METADATA = (_source_file = METADATA$FILENAME)
       ON_ERROR = ABORT_STATEMENT
       FORCE = TRUE;
+
+      UPDATE M5.BRONZE.SELL_PRICES SET _batch_id = '{{ execution.id }}', _loaded_at = CURRENT_TIMESTAMP() WHERE _batch_id IS NULL;
 
       INSERT INTO M5.BRONZE.LOAD_LOG (batch_id, flow_id, table_name, rows_loaded, status)
       SELECT '{{ execution.id }}', '{{ flow.id }}', 'SELL_PRICES', COUNT(*), 'SUCCESS'

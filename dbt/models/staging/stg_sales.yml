@@ -1,0 +1,34 @@
+version: 2
+
+models:
+  - name: stg_sales
+    description: >
+      Ventas diarias en formato largo (una fila por item × tienda × día), obtenidas con un unpivot
+      por nombre de columna de las entregas semanales de bronze.sales_raw. Incremental por week_idx.
+    data_tests:
+      # Grain: un valor por serie y día. Un duplicado indicaría una entrega cargada dos veces.
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [item_id, store_id, d]
+    columns:
+      - name: item_id
+        data_tests:
+          - not_null
+      - name: store_id
+        data_tests:
+          - not_null
+      - name: d
+        description: "Día en formato d_N; llave hacia calendar.d"
+        data_tests:
+          - not_null
+          - relationships:
+              to: source('bronze', 'calendar')
+              field: d
+      - name: sales
+        description: "Unidades vendidas en el día"
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: week_idx
+        data_tests:
+          - not_null

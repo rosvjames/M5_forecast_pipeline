@@ -1,6 +1,6 @@
 id: load_sales_week
 namespace: m5.pipeline
-description: Flow 2. Carga incremental de SALES, con control de semana y logging de errores. Se asume que el flujo ingest_raw se ejecutó previamente y creó los objetos de Bronze
+description: Flow 2. Carga incremental semanal de ventas. Un simulador de fuente publica la entrega de la semana (CSV ancho, unload en Snowflake) y la ingesta la copia tal cual a SALES_RAW, leyendo columnas por nombre. Requiere que ingest_raw haya creado los objetos de Bronze.
 
 # El backfill lanza cientos de ejecuciones: que corran de a una.
 # QUEUE: las que sobran esperan su turno (no se cancelan ni fallan).
@@ -67,48 +67,74 @@ tasks:
     type: io.kestra.plugin.core.flow.If
     condition: "{{ (outputs.compute_week.values.week_idx | number) >= 0 and (outputs.compute_week.values.week_idx | number) <= 277 }}"
     then:
-      # DELETE → INSERT (UNPIVOT) → LOAD_LOG en una sola transacción: re-ejecutar una semana la reemplaza.
-      # UNPIVOT y no 7 UNION ALL: el archivo (~117 MB) se lee una sola vez.
-      # Columnas por día con comillas ("d_1") para que d quede 'd_1' y no 'D_1'.
-      # INCLUDE NULLS: una celda vacía llega a Bronze como NULL en vez de perder la fila en silencio.
-      # Mapeo: d_n → $(n+6) (las 6 primeras columnas son id, item_id, dept_id, cat_id, store_id, state_id).
-      - id: load_week
-        type: io.kestra.plugin.jdbc.snowflake.Queries
+      # ---------- SIMULADOR DE FUENTE ----------
+      # M5 es un único archivo estático. Esta tarea hace de "Walmart publicando la semana k": genera la entrega
+      # semanal en el formato de la fuente (CSV ancho con encabezado: jerarquía + d_ini..d_fin) y la deja en la
+      # zona de entrega del stage, m5/sales_weekly/sales_wk_<k>.csv.gz, como evidencia inmutable de cada entrega.
+      # En un caso real no existiría: el archivo llegaría solo.
+      # Unload (COPY INTO @stage) dentro de Snowflake: los datos no salen del stage (~2 s por semana).
+      # Lee por posición ($n) porque hace de fuente y conoce su propio formato (d_n = columna n + 6).
+      # La INGESTA de abajo, en cambio, no conoce ninguna columna: carga por el nombre del encabezado.
+      - id: publish_week
+        type: io.kestra.plugin.jdbc.snowflake.Query
         sql: |
           {% set k = outputs.compute_week.values.week_idx | number %}
           {% set d_ini = outputs.week_range.values.d_ini | number %}
           {% set d_fin = outputs.week_range.values.d_fin | number %}
-          DELETE FROM M5.BRONZE.SALES WHERE week_idx = {{ k }};
+          COPY INTO @M5.BRONZE.RAW_STAGE/m5/sales_weekly/sales_wk_{{ k }}.csv.gz
+          FROM (
+            SELECT $1 AS "id", $2 AS "item_id", $3 AS "dept_id", $4 AS "cat_id", $5 AS "store_id", $6 AS "state_id"
+                   {% for n in range(d_ini, d_fin) %}, ${{ n + 6 }} AS "d_{{ n }}"{% endfor %}
+            FROM @M5.BRONZE.RAW_STAGE/m5/sales_train_evaluation.csv.gz (FILE_FORMAT => 'M5.BRONZE.CSV_M5')
+          )
+          FILE_FORMAT = (TYPE = CSV COMPRESSION = GZIP)
+          HEADER = TRUE
+          SINGLE = TRUE
+          OVERWRITE = TRUE
+        retry:
+          type: exponential
+          interval: PT10S
+          maxInterval: PT2M
+          maxAttempts: 3
+
+      # ---------- INGESTA ----------
+      # DELETE → COPY → UPDATE → LOAD_LOG en una sola transacción: re-ejecutar una semana la reemplaza.
+      # COPY por NOMBRE de columna (MATCH_BY_COLUMN_NAME): la ingesta no sabe qué columnas trae el archivo.
+      #   Las d_N nuevas las crea Snowflake (ENABLE_SCHEMA_EVOLUTION en SALES_RAW); si la fuente reordena o
+      #   agrega columnas, cada valor sigue llegando a la suya. No se transforma nada: el unpivot es de Silver.
+      # week_idx y _batch_id no vienen en el archivo y MATCH_BY_COLUMN_NAME no admite constantes:
+      #   se completan con el UPDATE (solo toca las filas recién cargadas, que son las únicas con week_idx NULL).
+      #   _loaded_at también: MATCH_BY_COLUMN_NAME no aplica el DEFAULT de la columna y la dejaría NULL.
+      # FORCE = TRUE: el historial de carga del COPY saltaría un archivo ya cargado; aquí se recarga a propósito.
+      - id: load_week
+        type: io.kestra.plugin.jdbc.snowflake.Queries
+        sql: |
+          {% set k = outputs.compute_week.values.week_idx | number %}
+          DELETE FROM M5.BRONZE.SALES_RAW WHERE week_idx = {{ k }};
           {% if inputs.simulate_failure == 'PERMANENT'
                 or (inputs.simulate_failure == 'TRANSIENT' and taskrun.attemptsCount == 0) %}
           SELECT 1/0;   -- falla simulada, solo para la demo: va después del DELETE para mostrar el rollback
           {% endif %}
 
-          INSERT INTO M5.BRONZE.SALES (
-            id, item_id, dept_id, cat_id, store_id, state_id,
-            d, sales, week_idx,
-            _source_row, _source_file, _batch_id
-          )
-          SELECT id, item_id, dept_id, cat_id, store_id, state_id,
-                 d, sales, {{ k }},
-                 src_row, src_file, '{{ execution.id }}'
-          FROM (
-            SELECT $1 AS id, $2 AS item_id, $3 AS dept_id, $4 AS cat_id, $5 AS store_id, $6 AS state_id,
-                   {% for n in range(d_ini, d_fin) %}${{ n + 6 }} AS "d_{{ n }}", {% endfor %}
-                   METADATA$FILE_ROW_NUMBER AS src_row,
-                   METADATA$FILENAME AS src_file
-            FROM @M5.BRONZE.RAW_STAGE/m5/sales_train_evaluation.csv.gz
-                 (FILE_FORMAT => 'M5.BRONZE.CSV_M5')
-          )
-          UNPIVOT INCLUDE NULLS (sales FOR d IN ({% for n in range(d_ini, d_fin) %}"d_{{ n }}"{% if not loop.last %}, {% endif %}{% endfor %}));
+          COPY INTO M5.BRONZE.SALES_RAW
+          FROM @M5.BRONZE.RAW_STAGE/m5/sales_weekly/sales_wk_{{ k }}.csv.gz
+          FILE_FORMAT = (FORMAT_NAME = 'M5.BRONZE.CSV_M5_HEADER')
+          MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE
+          INCLUDE_METADATA = (_source_file = METADATA$FILENAME, _source_row = METADATA$FILE_ROW_NUMBER)
+          ON_ERROR = ABORT_STATEMENT
+          FORCE = TRUE;
+
+          UPDATE M5.BRONZE.SALES_RAW
+          SET week_idx = {{ k }}, _batch_id = '{{ execution.id }}', _loaded_at = CURRENT_TIMESTAMP()
+          WHERE week_idx IS NULL;
 
           INSERT INTO M5.BRONZE.LOAD_LOG (batch_id, flow_id, week_idx, table_name, rows_loaded, status)
-          SELECT '{{ execution.id }}', '{{ flow.id }}', {{ k }}, 'SALES', COUNT(*), 'SUCCESS'
-          FROM M5.BRONZE.SALES
+          SELECT '{{ execution.id }}', '{{ flow.id }}', {{ k }}, 'SALES_RAW', COUNT(*), 'SUCCESS'
+          FROM M5.BRONZE.SALES_RAW
           WHERE week_idx = {{ k }};
         # Si Snowflake se cuelga, con concurrency 1 bloquearía todo el backfill detrás.
         timeout: PT10M
-        # Retry seguro: DELETE + INSERT van en una transacción, un intento fallido se deshace completo y no duplica.
+        # Retry seguro: todo va en una transacción, un intento fallido se deshace completo y no duplica.
         retry:
           type: exponential
           interval: PT10S
@@ -135,7 +161,7 @@ errors:
     sql: |
       INSERT INTO M5.BRONZE.LOAD_LOG (batch_id, flow_id, week_idx, table_name, rows_loaded, status, error_message)
       VALUES (
-        '{{ execution.id }}', '{{ flow.id }}', {{ outputs.compute_week.values.week_idx ?? 'NULL' }}, 'SALES', 0, 'FAILED',
+        '{{ execution.id }}', '{{ flow.id }}', {{ outputs.compute_week.values.week_idx ?? 'NULL' }}, 'SALES_RAW', 0, 'FAILED',
         '{{ (errorLogs()[0].message ?? 'sin mensaje') | replace({"'": "''"}) | abbreviate(1000) }}'
       );
 

@@ -7,7 +7,7 @@
 
 with store_daily as (
     select s.store_id, c.date, sum(s.sales) as units
-    from {{ source('bronze', 'sales') }} s
+    from {{ ref('stg_sales') }} s
     join {{ source('bronze', 'calendar') }} c on c.d = s.d
     group by s.store_id, c.date
 ),
@@ -42,13 +42,13 @@ series_stats as (
         item_id, store_id,
         max(sales) as max_sales,
         median(iff(sales > 0, sales, null)) as median_nonzero
-    from {{ source('bronze', 'sales') }}
+    from {{ ref('stg_sales') }}
     group by item_id, store_id
 ),
 
 spike_days as (
     select count(*) as n, count_if(s.sales > 10 * st.median_nonzero and s.sales >= 20) as spikes
-    from {{ source('bronze', 'sales') }} s
+    from {{ ref('stg_sales') }} s
     join series_stats st using (item_id, store_id)
 ),
 

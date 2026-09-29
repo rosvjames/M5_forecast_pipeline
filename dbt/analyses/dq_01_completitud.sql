@@ -2,7 +2,7 @@
 -- Una fila por chequeo: afectados = registros que caen en el caso, evaluados = universo revisado.
 -- Aquí no todo es "falla": los ceros previos al lanzamiento y los nulos de eventos son hallazgos a tratar en Silver.
 -- Referencia EDA: eda/reports/01_sales_eval.md (20,9 % previo al lanzamiento) y 04_calendar.md (91,8 % sin evento).
--- Nota: SALES llega hasta d_1939 hasta que el cron cargue la semana 277; los % difieren levemente del EDA (d_1941).
+-- Nota: stg_sales llega hasta d_1939 hasta que el cron cargue la semana 277; los % difieren levemente del EDA (d_1941).
 
 with calendar as (
     select *, try_to_number(substr(d, 3)) as d_num
@@ -12,7 +12,14 @@ with calendar as (
 -- ---------- Carga semanal (Kestra) ----------
 sales_by_week as (
     select week_idx, count(*) as n_rows, count(distinct d) as n_days
-    from {{ source('bronze', 'sales') }}
+    from {{ ref('stg_sales') }}
+    group by week_idx
+),
+
+raw_by_week as (
+    -- Filas de cada entrega en Bronze (una por serie).
+    select week_idx, count(*) as n_rows
+    from {{ source('bronze', 'sales_raw') }}
     group by week_idx
 ),
 
@@ -20,14 +27,14 @@ last_success_log as (
     -- Última carga exitosa de cada semana (las re-ejecuciones dejan varias filas en el log).
     select week_idx, rows_loaded
     from {{ source('bronze', 'load_log') }}
-    where table_name = 'SALES' and status = 'SUCCESS'
+    where table_name = 'SALES_RAW' and status = 'SUCCESS'
     qualify row_number() over (partition by week_idx order by loaded_at desc) = 1
 ),
 
 -- ---------- Malla de series ----------
 days_per_series as (
     select item_id, store_id, count(*) as n_days
-    from {{ source('bronze', 'sales') }}
+    from {{ ref('stg_sales') }}
     group by item_id, store_id
 ),
 
@@ -60,7 +67,7 @@ sales_vs_launch as (
         count_if(c.date < l.launch_date and s.sales > 0) as venta_pre_launch,
         count_if(c.date >= l.launch_date and p.sell_price is null) as sin_precio_post_launch,
         count_if(s.sales > 0 and p.sell_price is null) as venta_sin_precio
-    from {{ source('bronze', 'sales') }} s
+    from {{ ref('stg_sales') }} s
     join calendar c on c.d = s.d
     join price_span l on l.item_id = s.item_id and l.store_id = s.store_id
     left join {{ source('bronze', 'sell_prices') }} p
@@ -86,12 +93,12 @@ checks as (
 
     union all
 
-    -- 3. Lo que Kestra dijo que cargó (LOAD_LOG) coincide con lo que hay en la tabla.
+    -- 3. Lo que Kestra dijo que cargó (LOAD_LOG) coincide con lo que hay en Bronze.
     select
-        'semanas donde LOAD_LOG != filas reales',
-        count_if(l.rows_loaded is null or l.rows_loaded != w.n_rows),
+        'semanas donde LOAD_LOG != filas en sales_raw',
+        count_if(l.rows_loaded is null or l.rows_loaded != r.n_rows),
         count(*)
-    from sales_by_week w
+    from raw_by_week r
     left join last_success_log l using (week_idx)
 
     union all
@@ -99,7 +106,7 @@ checks as (
     -- 4. Malla completa: todas las series tienen todos los días cargados.
     select
         'series con días faltantes',
-        count_if(n_days != (select count(distinct d) from {{ source('bronze', 'sales') }})),
+        count_if(n_days != (select count(distinct d) from {{ ref('stg_sales') }})),
         count(*)
     from days_per_series
 

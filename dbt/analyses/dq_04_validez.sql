@@ -12,12 +12,12 @@ with sales_checks as (
         count_if(try_to_number(substr(d, 3)) not between 1 and 1941) as d_fuera_de_rango,
         -- Regla del flow load_sales_week: la semana k carga d_(7k+1) .. d_(7k+7).
         count_if(week_idx != floor((try_to_number(substr(d, 3)) - 1) / 7)) as week_idx_incoherente
-    from {{ source('bronze', 'sales') }}
+    from {{ ref('stg_sales') }}
 ),
 
 series as (
     select distinct item_id, dept_id, cat_id, store_id, state_id
-    from {{ source('bronze', 'sales') }}
+    from {{ ref('stg_sales') }}
 ),
 
 calendar as (

@@ -1,7 +1,7 @@
 # Enfoque actualizado del proyecto
 
 Grupo: Isabella Tulcán, Gabriel Ávalos, Keoma Quiroga, David Bucheli, James Soto
-Última actualización: 2026-09-25
+Última actualización: 2026-09-29
 
 Este documento registra los cambios al planteamiento del PSet 1 tras la defensa y el análisis exploratorio. No reemplaza el memo del PSet 1: explica qué cambió, por qué, y qué decisiones quedan fijadas para el PSet 2 en adelante.
 
@@ -166,8 +166,9 @@ Complementos opcionales, no para el PSet 2: FreshRetailNet para validar la regla
 
 - Ingerir `sales_train_evaluation.csv`, `sell_prices.csv` y `calendar.csv`. `sales_train_validation` es un prefijo exacto de evaluation (0 diferencias en 58 M de celdas); `sample_submission` está todo en ceros.
 - Descarga con la API de Kaggle desde Kestra (`kaggle competitions download -c m5-forecasting-accuracy`), con el token en un secret.
-- Dataset estático → simular cargas: backfill de d_1..d_1913 por semanas y las últimas 4 semanas (d_1914..d_1941) como cargas incrementales.
-- Llaves naturales para idempotencia: ventas (item_id, store_id, date); precios (store_id, item_id, wm_yr_wk).
+- Dataset estático → simular cargas con un reloj semanal: la semana k carga d_(7k+1)..d_(7k+7). Backfill de las semanas 0–276 (d_1..d_1939); la 277 (d_1940–1941) entra con el cron del sábado 2026-10-03.
+- Bronze guarda cada entrega tal como la publica la fuente (decisión revisada el 28-sep, tras el feedback de Erick): un simulador publica cada semana un CSV ancho (jerarquía + sus 7 columnas `d_N`) y Kestra lo copia a `BRONZE.SALES_RAW` **por nombre de columna** (`MATCH_BY_COLUMN_NAME` + schema evolution). El paso a formato largo se hace en dbt (`stg_sales`). Así, si la fuente reordena o agrega columnas, la ingesta no corrompe datos. La primera versión hacía el `UNPIVOT` en la ingesta leyendo columnas por posición.
+- Llaves naturales para idempotencia: ventas en Bronze (item_id, store_id, week_idx) y en Silver (item_id, store_id, d); precios (store_id, item_id, wm_yr_wk).
 
 **Calidad y limpieza (Silver)**
 

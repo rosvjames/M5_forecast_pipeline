@@ -1,26 +1,27 @@
 # Calidad de datos (Fase 2)
 
-Base para la sección *Data Quality* del documento técnico. Todas las cifras salen de SQL sobre Bronze en Snowflake y se pueden reproducir:
+Base para la sección *Data Quality* del documento técnico. Todas las cifras salen de SQL en Snowflake y se pueden reproducir. Calendario y precios se leen de Bronze. Las ventas se leen de `SILVER.stg_sales`, que es `BRONZE.SALES_RAW` en formato largo, sin filtros ni correcciones (una celda de la entrega = una fila):
 
 ```
-docker compose run --rm dbt test -s source:bronze          # contrato de ingesta (14 tests)
+docker compose run --rm dbt build -s stg_sales+ source:bronze   # contrato de ingesta + stg_sales y sus tests
 docker compose run --rm dbt show -s dq_01_completitud --limit 20
 docker compose run --rm dbt show -s dq_02_precision   --limit 20
 docker compose run --rm dbt show -s dq_03_consistencia --limit 20
 docker compose run --rm dbt show -s dq_04_validez     --limit 20
 ```
 
-*Corte: 27-sep-2026, `SALES` hasta d_1939 (59.120.110 filas). La semana 277 (d_1940–1941) entra con el cron del 3-oct; los porcentajes pueden moverse en décimas.*
+*Corte: 29-sep-2026, `SALES_RAW` con las semanas 0–276 (8.445.730 filas) → `stg_sales` hasta d_1939 (59.120.110 filas). Las cifras son idénticas a las del corte del 27-sep, medidas sobre la tabla v1 en formato largo (`BRONZE.SALES`, ya eliminada). La semana 277 (d_1940–1941) entra con el cron del 3-oct; los porcentajes pueden moverse en décimas.*
 
 ## Cómo se organiza la revisión
 
 | Capa | Qué se verifica | Herramienta |
 |---|---|---|
-| Bronze | **Contrato de ingesta:** unicidad de llaves naturales, llaves no nulas, `d` y `wm_yr_wk` existen en calendar | Tests de dbt sobre `source()` (14/14 PASS) |
-| Bronze | **Contenido:** completitud, precisión, consistencia, validez | `dbt/analyses/dq_01`–`dq_04` (solo lectura) |
+| Bronze | **Contrato de ingesta:** unicidad de llaves naturales (en ventas, una fila por serie y entrega), llaves no nulas, `wm_yr_wk` existe en calendar | Tests de dbt sobre `source()` |
+| Silver (`stg_sales`) | **Unpivot sin pérdidas:** unicidad de (item, store, d), `d` existe en calendar, `sales` ≥ 0, todas las semanas completas | Tests de `stg_sales.yml` y `assert_stg_sales_weeks_complete` |
+| Bronze + `stg_sales` | **Contenido:** completitud, precisión, consistencia, validez | `dbt/analyses/dq_01`–`dq_04` (solo lectura) |
 | Silver / Gold | **Acción:** flags, filtros y tests de reglas de negocio | Modelos dbt (Fases 3 y 4) |
 
-Bronze no se corrige ni se testea por contenido: conserva el dato original. Los problemas se miden aquí y se tratan en Silver.
+Bronze no se corrige ni se testea por contenido: conserva la entrega original. `stg_sales` solo cambia la forma (ancho → largo), no los valores. Los problemas se miden aquí y se tratan en los modelos Silver que vienen después.
 
 ## Problemas encontrados
 
@@ -41,9 +42,9 @@ Confirman los supuestos de los que dependen los joins y las dimensiones de Silve
 
 | Dimensión | Verificación | Resultado | Por qué importa |
 |---|---|---|---|
-| Completitud | Semanas 0–276 sin huecos, 30.490 × 7 filas cada una, filas = `LOAD_LOG` | 0 fallas en 277 semanas | La ingesta con Kestra no perdió ni duplicó lotes |
+| Completitud | Semanas 0–276 sin huecos: 30.490 filas por entrega en `SALES_RAW` (= `LOAD_LOG`) y 30.490 × 7 en `stg_sales` | 0 fallas en 277 semanas | La ingesta con Kestra no perdió ni duplicó lotes, y el unpivot no perdió celdas |
 | Completitud | Todas las series tienen todos los días; calendario d_1–d_1969 continuo | 0 fallas | Malla completa SKU × día para el fact |
-| Consistencia | Unicidad de (item, store, d) y de (store, item, wm_yr_wk) | 0 duplicados (tests de Bronze) | Evidencia de idempotencia de la carga |
+| Consistencia | Unicidad de (item, store, week_idx) en `SALES_RAW`, (item, store, d) en `stg_sales` y (store, item, wm_yr_wk) en precios | 0 duplicados (tests de dbt) | Evidencia de idempotencia de la carga |
 | Consistencia | Un item → un dept → una cat; una tienda → un estado; `id` = item + store + sufijo | 0 contradicciones en 30.490 series | `dim_item` y `dim_store` se construyen sin reglas de resolución y `id` se descarta por redundante |
 | Consistencia | Mismos 30.490 pares item × tienda en ventas y en precios | 0 pares huérfanos | El join de precios no deja series sin precio |
 | Validez | `sales` ≥ 0 y no nulo; `d` en d_1–d_1941; `week_idx` coherente con `d` | 0 fallas en 59,1 M filas | Variable objetivo válida; cada fila entró en su lote |
@@ -53,5 +54,6 @@ Confirman los supuestos de los que dependen los joins y las dimensiones de Silve
 ## Notas
 
 - Las cifras coinciden con el EDA en Python (`eda/reports/01`–`04`). Las diferencias son de décimas y vienen del corte en d_1939.
+- Al rediseñar la ingesta (v2, 28-sep) se volvieron a correr `dq_01`–`dq_04` sobre `stg_sales`: todas las cifras de este documento se mantuvieron idénticas.
 - El EDA reportaba 10 precios de $0,01. El conteo en Snowflake y en el CSV original es 12 (se corrigió `02_sell_prices.md`).
 - Umbrales usados, iguales a los del EDA: día anómalo = < 10 % de la mediana móvil centrada de 29 días; pico = > 10× la mediana de los días con venta y ≥ 20 u; precio extremo = > 5× o < 0,2× la mediana de la serie.
