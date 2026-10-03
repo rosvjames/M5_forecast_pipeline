@@ -50,6 +50,6 @@ models:
         data_tests:
           - not_null
       - name: is_sales_spike
-        description: "Venta > 10× la mediana de días con venta de la serie y >= 20 u (calidad #5). Solo descriptivo"
+        description: "Venta > 10× la mediana de días con venta de la serie y >= 20 u (calidad #5). Solo diagnóstico: no es feature, no filtra entrenamiento ni excluye días de la métrica principal"
         data_tests:
           - not_null

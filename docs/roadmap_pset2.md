@@ -12,23 +12,26 @@ Modo de trabajo: James implementa; Claude guía, revisa y explica. Marcar `[x]` 
 
 ---
 
-## ▶ Retomar aquí (29-sep)
+## ▶ Retomar aquí (2-oct)
 
-Backfill v2 verificado el 29-sep: 277/277 ejecuciones en SUCCESS, `SALES_RAW` con 8.445.730 filas, `stg_sales` con 59.120.110 filas y SUM 66.821.317, 23/23 tests en verde y `dq_01`–`dq_04` sin cambios. `BRONZE.SALES` (v1) eliminada. Docs actualizados.
+Fase 3 (Silver) cerrada salvo los flags de quiebre de stock, que se dejaron para después de Spark (decisión 2-oct: Gold y Spark pesan 30 % y estaban en cero; los quiebres se agregan luego con un `left join` al fact sin rediseñar nada).
 
-1. Seguir con la Fase 3 (Silver): `stg_calendar`, `stg_sell_prices`, modelo con fecha + flags de calidad.
-2. **Sáb 3-oct:** confirmar la semana 277 (ver Fase 1).
+1. **Fase 4 (Gold):** `fact_sales` desde `int_sales_daily`, `dim_item`, `dim_store`, `dim_date`, `bridge_snap` y tests de negocio.
+2. **Sáb 3-oct:** confirmar la semana 277 (ver Fase 1). Después: `dbt build -s stg_sales+`. OrbStack y Kestra deben estar encendidos.
+3. Fase 5 (Spark → OBT). Es el mayor riesgo: el conector Spark–Snowflake no está probado.
+4. `int_stockout_flags` (calidad #4): reglas conservadora y binomial negativa, con `k` **causal** (ventana expansiva hasta el día previo a la racha; el EDA usaba la serie completa → fuga). Recalcular los % y actualizar `calidad_datos.md` #4 y el §5 del enfoque.
+5. Documento (domingo).
 
 ## Estado actual y cómo sumarse
 
-*Actualizado: 29-sep-2026.*
+*Actualizado: 2-oct-2026.*
 
 | Fase (PDF) | Estado |
 |---|---|
 | 0 · Infraestructura (PDF §1) | ✅ Docker Compose con Kestra, Spark y dbt, conectado a Snowflake. Falta el diagrama. |
 | 1 · Ingesta Kestra → Bronze (PDF §2) | ✅ Rediseñada (v2, 28-sep): Bronze guarda las entregas semanales tal cual (`SALES_RAW`, formato ancho, carga por nombre de columna). Backfill v2 terminado y verificado (29-sep). Falta la 277, que entra con el cron del 3-oct. |
 | 2 · Calidad (PDF §3) | ✅ Tests de contrato en Bronze y de unpivot en `stg_sales`, 4 analyses (`dbt/analyses/dq_0*`) y tabla de decisiones en `docs/calidad_datos.md`. Los flags se implementan en Silver. |
-| 3 · dbt Silver | ⬜ |
+| 3 · dbt Silver | 🔄 `stg_calendar`, `stg_sell_prices` e `int_sales_daily` (fecha, precio, ingreso, SNAP y flags #1, #2, #3, #5) listos y testeados. Falta `int_stockout_flags` (#4), pospuesto. |
 | 4 · dbt Gold (star schema) | ⬜ |
 | 5 · Spark → OBT | ⬜ |
 | 6 · Documento y README | ⬜ README al día hasta la ingesta. |
@@ -37,6 +40,8 @@ Backfill v2 verificado el 29-sep: 277/277 ejecuciones en SUCCESS, `SALES_RAW` co
 - `BRONZE.CALENDAR` y `BRONZE.SELL_PRICES`: valores originales de Kaggle cargados por nombre de columna, más `_source_file`, `_batch_id` y `_loaded_at`.
 - `BRONZE.SALES_RAW`: entregas semanales de ventas tal como las publica la fuente (formato ancho: jerarquía + columnas `D_N`, que crea schema evolution; una fila por serie y entrega) + `week_idx`, `_source_file`, `_source_row`, `_batch_id`, `_loaded_at`.
 - `SILVER.stg_sales` (dbt, incremental): las ventas en formato largo, una fila por `item_id` × `store_id` × `d`.
+- `SILVER.stg_calendar` (view), `SILVER.stg_sell_prices` (table, con `launch_wm_yr_wk`) y el seed `SILVER.store_closures`.
+- `SILVER.int_sales_daily` (table, ~30 s): ventas + fecha + precio + ingreso + SNAP + flags de calidad. Es la base de `fact_sales`.
 - `LOAD_LOG` guarda la auditoría de cargas. En `@RAW_STAGE/m5/` están los CSV de Kaggle y en `@RAW_STAGE/m5/sales_weekly/` las entregas semanales.
 
 **Tareas que se pueden adelantar sin bloquear la ingesta.** Anota tu nombre en la tarea antes de empezar, para no duplicar trabajo.
@@ -44,8 +49,8 @@ Backfill v2 verificado el 29-sep: 277/277 ejecuciones en SUCCESS, `SALES_RAW` co
 | Tarea | Fase | Depende de | Responsable |
 |---|---|---|---|
 | ~~Consultas de calidad sobre Bronze~~ ✅ hecho (`dbt/analyses/dq_0*`, `docs/calidad_datos.md`) | 2 | — | James |
-| Modelos `stg_calendar` y `stg_sell_prices` (`sources.yml` ya está listo) | 3 | Nada | |
-| Modelo Silver con fecha (join `stg_sales` → calendar) y los flags de limpieza de `calidad_datos.md` (`stg_sales` ya existe) | 3 | `stg_calendar` | |
+| ~~Modelos `stg_calendar`, `stg_sell_prices` e `int_sales_daily`~~ ✅ hecho | 3 | — | James |
+| `int_stockout_flags` (calidad #4, `k` causal) | 3 | `int_sales_daily` | |
 | Conector Spark–Snowflake: jars en la imagen o en `spark/`, y una prueba que lea `BRONZE.CALENDAR` desde Spark | 5 | Nada | |
 | Diagrama de arquitectura y sección *Batch vs. streaming* del documento | 6 | Nada | |
 
@@ -113,11 +118,13 @@ Tareas:
 
 ## Fase 3 — dbt Silver (limpieza)
 
-- [ ] Proyecto dbt con `sources.yml` sobre Bronze (usar `source()`), perfiles por variables de entorno.
-- [ ] Modelos `stg_*`: tipos, nombres, fechas (join a calendar), jerarquía.
-- [ ] Limpieza: `is_pre_launch`, `is_christmas_closed`, cierres puntuales, `is_suspected_stockout_conservative` (SQL con window functions), picos marcados.
-- [ ] Materialización: incremental para ventas (por semana), table para el resto.
-- [ ] Tests: `not_null`, `unique` / `unique_combination_of_columns`, `accepted_values`, rangos (ventas ≥ 0).
+- [x] Proyecto dbt con `sources.yml` sobre Bronze (usar `source()`), perfiles por variables de entorno.
+- [x] Modelos `stg_*`: `stg_sales` (unpivot), `stg_calendar` (d_num, SNAP booleano, eventos, Navidad, horizonte), `stg_sell_prices` (`launch_wm_yr_wk`).
+- [x] `int_sales_daily`: join ventas → calendario → precios (left, por tienda + item + `wm_yr_wk`), ingreso, SNAP del estado. Cifras iguales a `calidad_datos.md`.
+- [x] Flags: `is_pre_launch` (#1, por primera semana con precio, no por primera venta: 144 series se lanzaron antes de vender), `is_christmas_closed` (#2), `is_store_closed` (#3, seed `store_closures`), `is_sales_spike` (#5, solo diagnóstico).
+- [ ] `int_stockout_flags`: `is_suspected_stockout_conservative` y `is_suspected_stockout_nb` (#4, `k` causal). **Pospuesto** hasta después de Spark.
+- [x] Materialización: `stg_sales` incremental por semana; `int_sales_daily` table (la mediana de picos usa la serie completa; rebuild ~30 s); `stg_sell_prices` table; `stg_calendar` view.
+- [x] Tests: grain, `equal_rowcount` contra `stg_sales`, sin ventas antes del lanzamiento, sin días post-lanzamiento sin precio, `accepted_values`, rangos, conversión `d` → fecha exacta.
 
 ## Fase 4 — dbt Gold (star schema, 15 %)
 
@@ -152,6 +159,7 @@ Tareas:
 - **Ingesta v1 → v2 (28-sep, feedback de Erick).** v1 hacía el `UNPIVOT` en la ingesta y leía las columnas por posición (`$n`): un cambio de formato en la fuente habría corrompido datos sin error. v2 guarda la entrega tal cual en `SALES_RAW` (formato ancho, `COPY` por nombre de columna, schema evolution) y hace el unpivot en dbt (`stg_sales`). Se validó que v2 reproduce v1: mismas 59.120.110 filas, mismo SUM y mismas cifras de calidad.
 - **Costo de v2:** el backfill pasó de ~35 min (v1, ~6 s por semana) a ~2 h 45 min (mediana 28 s por semana), porque el `UPDATE` post-`COPY` recorre una tabla que crece. Mejora posible: derivar `week_idx` de `_source_file` y evitar el `UPDATE`.
 - **Gotchas que vale la pena mencionar:** `MATCH_BY_COLUMN_NAME` no aplica los `DEFAULT` (por eso `_loaded_at` se fija en el `UPDATE`), y la carga supone `concurrency: 1`.
+- **Flags y fuga de información (Limitaciones):** `is_sales_spike` usa la mediana de la serie completa y por eso es solo diagnóstico: nunca feature, nunca filtro de entrenamiento, nunca excluye días de la métrica principal. Los flags de quiebre sí filtran, así que su dispersión `k` se calcula con ventana causal (el EDA la calculaba con la serie completa).
 - **Tabla ancha y dispersa:** es consecuencia de cómo publica M5 (un archivo que crece una columna por día). Con una fuente real en formato largo, Bronze sería un append de filas.
 
 ---

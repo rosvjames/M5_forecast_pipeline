@@ -99,7 +99,8 @@ select
     is_christmas_closed,
     is_store_closed,
     -- Calidad #5: pico = > 10× la mediana de los días con venta y >= 20 u (mismos umbrales que el EDA y dq_02).
-    -- Descriptivo: usa la serie completa, así que NO debe usarse como feature ni para filtrar entrenamiento.
+    -- Solo diagnóstico (desglose del error por tipo de día). Usa la mediana de la serie completa, así que
+    -- NO debe usarse como feature, ni para filtrar el entrenamiento, ni para excluir días de la métrica principal.
     coalesce(sales > 10 * series_median_nonzero and sales >= 20, false) as is_sales_spike,
     week_idx,
     _loaded_at
