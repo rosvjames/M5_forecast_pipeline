@@ -1,0 +1,55 @@
+version: 2
+
+models:
+  - name: int_sales_daily
+    description: >
+      Ventas diarias por item × tienda × día con fecha, precio vigente, ingreso, SNAP del estado y flags de
+      calidad (lanzamiento, Navidad, cierres, picos). Mismo grain y conteo que stg_sales: se marca, no se borra.
+    data_tests:
+      # Grain: los joins con calendario y precios no pueden duplicar filas.
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [item_id, store_id, d]
+      # Ni pierden: mismas filas que stg_sales (un inner join con calendar podría descartar días sin avisar).
+      - dbt_utils.equal_rowcount:
+          compare_model: ref('stg_sales')
+      # Regla de negocio: ninguna venta antes del lanzamiento.
+      - dbt_utils.expression_is_true:
+          expression: "sales = 0"
+          config:
+            where: "is_pre_launch"
+      # Regla de negocio: desde el lanzamiento, ningún día sin precio (el join de precios está completo).
+      - dbt_utils.expression_is_true:
+          expression: "sell_price is not null"
+          config:
+            where: "not is_pre_launch"
+    columns:
+      - name: date
+        data_tests:
+          - not_null
+      - name: wm_yr_wk
+        data_tests:
+          - not_null
+      - name: sales
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: is_snap
+        data_tests:
+          - not_null
+      - name: is_pre_launch
+        description: "Día anterior a la primera semana con precio de la serie: el producto no estaba en la tienda (calidad #1)"
+        data_tests:
+          - not_null
+      - name: is_christmas_closed
+        description: "25-dic, tiendas cerradas (calidad #2)"
+        data_tests:
+          - not_null
+      - name: is_store_closed
+        description: "Cierre puntual de tienda listado en el seed store_closures (calidad #3)"
+        data_tests:
+          - not_null
+      - name: is_sales_spike
+        description: "Venta > 10× la mediana de días con venta de la serie y >= 20 u (calidad #5). Solo descriptivo"
+        data_tests:
+          - not_null

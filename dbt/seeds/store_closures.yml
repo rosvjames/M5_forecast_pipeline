@@ -1,0 +1,14 @@
+version: 2
+
+seeds:
+  - name: store_closures
+    description: >
+      Cierres puntuales de tienda fuera de Navidad (calidad #3), detectados por dq_02: días en que la tienda
+      vendió < 10 % de su mediana móvil de 29 días. Se listan a mano porque son 2 casos revisados uno por uno;
+      las otras 19 caídas bajo el 50 % (Thanksgiving, etc.) son demanda real y no se incluyen.
+    config:
+      column_types:
+        date: date
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [store_id, date]
