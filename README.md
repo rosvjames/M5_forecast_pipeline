@@ -94,7 +94,7 @@ Todas las imágenes tienen versión fija para que el entorno sea reproducible.
 |---|---|---|
 | Kestra | `kestra/kestra:v1.3.40` | Orquestador (UI + scheduler + worker) |
 | PostgreSQL | `postgres:16.15` | Backend de Kestra (flows, ejecuciones, logs) |
-| Spark | `apache/spark:4.1.3-scala2.13-java17-python3-ubuntu` | Cluster standalone (1 master + 1 worker) |
+| Spark | `apache/spark:4.1.3-scala2.13-java17-python3-ubuntu` + conector `spark-snowflake_2.13:3.2.2-spark_4.1` (`spark/Dockerfile`) | Cluster standalone (1 master + 1 worker); construye la OBT |
 | dbt Core | `ghcr.io/dbt-labs/dbt-snowflake:1.9.0` | Transformaciones Silver y Gold |
 | Snowflake | Cuenta trial (Enterprise) | Data warehouse: esquemas `BRONZE`, `SILVER`, `GOLD`, `OBT` |
 
@@ -106,7 +106,7 @@ pset_2/
 ├── .env.example         # Plantilla de variables de entorno (copiar a .env)
 ├── kestra/              # Flows de Kestra (se sincronizan solos con la UI)
 ├── dbt/                 # Proyecto dbt (profiles.yml lee todo de variables de entorno)
-├── spark/               # Scripts de PySpark (montados en /opt/spark-apps)
+├── spark/               # Dockerfile (Spark + conector Snowflake) y scripts PySpark (montados en /opt/spark-apps)
 ├── snowflake/setup.sql  # Crea warehouse, base, esquemas, rol y usuario de servicio
 └── docs/                # Enfoque del proyecto y roadmap
 ```
@@ -229,6 +229,12 @@ dbt no aparece en esta tabla porque no queda corriendo: se ejecuta a demanda (ve
      /opt/spark/examples/src/main/python/pi.py 10
    ```
    Debe imprimir `Pi is roughly 3.14...`.
+4. **Spark → Snowflake:** lee `GOLD.DIM_STORE` con el conector (requiere Gold construido):
+   ```bash
+   docker compose exec spark-master /opt/spark/bin/spark-submit \
+     --master spark://spark-master:7077 /opt/spark-apps/test_connection.py
+   ```
+   Debe mostrar las 10 tiendas. El `NotSerializableException: StorageStatus` del log es telemetría del conector y no afecta el resultado.
 
 ### 7. Cargar la capa Bronze (ingesta)
 
@@ -319,6 +325,18 @@ docker compose exec spark-master /opt/spark/bin/spark-submit \
   --master spark://spark-master:7077 \
   /opt/spark-apps/<script>.py
 ```
+
+La imagen se construye la primera vez con `docker compose up -d --build` (agrega los jars del conector a `/opt/spark/jars`). El driver corre en `spark-master`, que recibe las variables `SNOWFLAKE_*` y la llave privada montada en `/secrets/rsa_key.p8`.
+
+**OBT** (después de `dbt build` de Gold):
+
+```bash
+docker compose exec spark-master /opt/spark/bin/spark-submit \
+  --master spark://spark-master:7077 --driver-memory 2g --executor-memory 3g \
+  /opt/spark-apps/build_obt.py
+```
+
+`build_obt.py` lee `fact_sales` y las cuatro dimensiones de `GOLD`, las une en Spark (left joins con broadcast de las dimensiones, `autopushdown` apagado para que el join no lo haga Snowflake) y escribe `OBT.OBT_SALES`. El grain es item × tienda × día, el mismo del fact. Antes de escribir valida que el conteo sea igual al del fact, que la llave sea única, que no haya nulos en las columnas de dimensiones y que el estado coincida; si algo falla, termina con error sin escribir.
 
 ### Apagar
 

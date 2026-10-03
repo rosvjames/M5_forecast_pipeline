@@ -81,16 +81,27 @@ services:
         condition: service_healthy
 
   spark-master:
-    image: apache/spark:4.1.3-scala2.13-java17-python3-ubuntu
+    # Imagen oficial + jars del conector Spark–Snowflake (spark/Dockerfile)
+    build: ./spark
+    image: m5-spark:4.1.3
     hostname: spark-master
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    # El driver (spark-submit) corre en este contenedor: solo él necesita la conexión a Snowflake.
+    # Variables puntuales en vez de env_file, para no exponer los secretos de Kestra.
+    environment:
+      - SNOWFLAKE_ACCOUNT=${SNOWFLAKE_ACCOUNT}
+      - SNOWFLAKE_USER=${SNOWFLAKE_USER}
+      - SNOWFLAKE_ROLE=${SNOWFLAKE_ROLE}
+      - SNOWFLAKE_WAREHOUSE=${SNOWFLAKE_WAREHOUSE}
+      - SNOWFLAKE_DATABASE=${SNOWFLAKE_DATABASE}
     ports:
       - "8090:8080"      #  Master UI (Kestra already uses 8080 on the host)
     volumes:
       - ./spark:/opt/spark-apps
+      - ${SNOWFLAKE_PRIVATE_KEY_PATH}:/secrets/rsa_key.p8:ro
 
   spark-worker:
-    image: apache/spark:4.1.3-scala2.13-java17-python3-ubuntu
+    image: m5-spark:4.1.3   # la construye spark-master
     hostname: spark-worker
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     environment:

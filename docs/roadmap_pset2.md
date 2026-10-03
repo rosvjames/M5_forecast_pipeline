@@ -16,9 +16,9 @@ Modo de trabajo: James implementa; Claude guía, revisa y explica. Marcar `[x]` 
 
 Fase 3 (Silver) cerrada salvo los flags de quiebre de stock, que se dejaron para después de Spark (decisión 2-oct: Gold y Spark pesan 30 % y estaban en cero; los quiebres se agregan luego con un `left join` al fact sin rediseñar nada).
 
-1. ~~Fase 4 (Gold)~~ ✅ 2-oct (falta solo el diagrama del star schema).
+1. ~~Fase 4 (Gold)~~ ✅ 2-oct, con diagrama en el README.
 2. **Sáb 3-oct:** confirmar la semana 277 (ver Fase 1). Después: `dbt build -s stg_sales+` (reconstruye Silver y Gold). OrbStack y Kestra deben estar encendidos.
-3. Fase 5 (Spark → OBT). Es el mayor riesgo: el conector Spark–Snowflake no está probado.
+3. ~~Fase 5 (Spark → OBT)~~ ✅ 2-oct. Queda re-correrla tras la semana 277.
 4. `int_stockout_flags` (calidad #4): reglas conservadora y binomial negativa, con `k` **causal** (ventana expansiva hasta el día previo a la racha; el EDA usaba la serie completa → fuga). Recalcular los % y actualizar `calidad_datos.md` #4 y el §5 del enfoque.
 5. Documento (domingo).
 
@@ -32,8 +32,8 @@ Fase 3 (Silver) cerrada salvo los flags de quiebre de stock, que se dejaron para
 | 1 · Ingesta Kestra → Bronze (PDF §2) | ✅ Rediseñada (v2, 28-sep): Bronze guarda las entregas semanales tal cual (`SALES_RAW`, formato ancho, carga por nombre de columna). Backfill v2 terminado y verificado (29-sep). Falta la 277, que entra con el cron del 3-oct. |
 | 2 · Calidad (PDF §3) | ✅ Tests de contrato en Bronze y de unpivot en `stg_sales`, 4 analyses (`dbt/analyses/dq_0*`) y tabla de decisiones en `docs/calidad_datos.md`. Los flags se implementan en Silver. |
 | 3 · dbt Silver | 🔄 `stg_calendar`, `stg_sell_prices` e `int_sales_daily` (fecha, precio, ingreso, SNAP y flags #1, #2, #3, #5) listos y testeados. Falta `int_stockout_flags` (#4), pospuesto. |
-| 4 · dbt Gold (star schema) | ✅ `fact_sales`, `dim_date`, `dim_item`, `dim_store` y `dim_date_state` (SNAP) en `GOLD`, 55 tests en verde (2-oct). Falta el diagrama. |
-| 5 · Spark → OBT | ⬜ |
+| 4 · dbt Gold (star schema) | ✅ `fact_sales`, `dim_date`, `dim_item`, `dim_store` y `dim_date_state` (SNAP) en `GOLD`, 55 tests en verde y diagrama en el README (2-oct). |
+| 5 · Spark → OBT | ✅ `spark/build_obt.py` (conector `spark-snowflake` 3.2.2 en `spark/Dockerfile`): `OBT.OBT_SALES`, 59.120.110 filas, validaciones OK (2-oct, ~13 min). Falta re-correr tras la semana 277. |
 | 6 · Documento y README | ⬜ README al día hasta la ingesta. |
 
 **Qué hay en Snowflake:**
@@ -52,7 +52,7 @@ Fase 3 (Silver) cerrada salvo los flags de quiebre de stock, que se dejaron para
 | ~~Consultas de calidad sobre Bronze~~ ✅ hecho (`dbt/analyses/dq_0*`, `docs/calidad_datos.md`) | 2 | — | James |
 | ~~Modelos `stg_calendar`, `stg_sell_prices` e `int_sales_daily`~~ ✅ hecho | 3 | — | James |
 | `int_stockout_flags` (calidad #4, `k` causal) | 3 | `int_sales_daily` | |
-| Conector Spark–Snowflake: jars en la imagen o en `spark/`, y una prueba que lea `BRONZE.CALENDAR` desde Spark | 5 | Nada | |
+| ~~Conector Spark–Snowflake y prueba de lectura~~ ✅ hecho (`spark/Dockerfile`, `spark/test_connection.py`) | 5 | — | James |
 | Diagrama de arquitectura y sección *Batch vs. streaming* del documento | 6 | Nada | |
 
 **Reglas para trabajar en paralelo:**
@@ -138,14 +138,15 @@ Tareas:
   - Ninguna venta sin precio.
   - Ninguna venta antes del lanzamiento.
   - El join de precios no cambia el conteo de filas.
-- [ ] Diagrama del star schema.
+- [x] Diagrama del star schema (Mermaid en el README, sección "Modelo de datos (Gold)").
 
 ## Fase 5 — Spark → OBT (15 %)
 
-- [ ] Leer Gold desde Snowflake con el conector Spark-Snowflake (jars en la imagen o en `spark/`).
-- [ ] Construir la OBT: fact + dims + SNAP del estado de la tienda. Grain = SKU–tienda–día (el mismo del fact).
-- [ ] Validar joins: conteo antes = después, unicidad de la llave, nulos en columnas de dims = 0.
-- [ ] Escribir en `OBT` de Snowflake.
+- [x] Leer Gold desde Snowflake con el conector Spark-Snowflake: jars en la imagen (`spark/Dockerfile`), key-pair con `pem_private_key`, `autopushdown` apagado para que los joins los haga Spark. Prueba: `spark/test_connection.py`.
+- [x] Construir la OBT: fact + dims + SNAP del estado de la tienda (left joins con broadcast). Grain = SKU–tienda–día (el mismo del fact). Sin `persist`: cachear 59 M filas dio OutOfMemoryError con 4 GB de worker.
+- [x] Validar joins: conteo antes = después, unicidad de la llave, nulos en columnas de dims = 0, estado fact = estado `dim_store`. Si algo falla, no escribe.
+- [x] Escribir en `OBT` de Snowflake (`OBT_SALES`, overwrite con tabla de staging) y verificar el conteo leyendo de vuelta.
+- [ ] Re-correr `build_obt.py` después de la semana 277 (`dbt build` de Gold primero): deben quedar 59.181.090 filas.
 - [ ] Explicar cuándo usar el star schema (análisis, BI, dbt tests) y cuándo la OBT (entrenar el modelo).
 
 ## Fase 6 — Documento técnico (≤ 6 páginas) y README
