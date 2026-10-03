@@ -1,0 +1,23 @@
+version: 2
+
+models:
+  - name: dim_item
+    description: "Dimensión producto: una fila por item (3.049), jerarquía item → dept → cat."
+    data_tests:
+      # Jerarquía coherente: el departamento pertenece a la categoría (FOODS_1 ⊂ FOODS).
+      - dbt_utils.expression_is_true:
+          expression: "startswith(dept_id, cat_id)"
+    columns:
+      - name: item_id
+        description: "Llave. unique también prueba que cada item tiene un solo dept/cat"
+        data_tests:
+          - not_null
+          - unique
+      - name: dept_id
+        data_tests:
+          - not_null
+      - name: cat_id
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ['FOODS', 'HOBBIES', 'HOUSEHOLD']

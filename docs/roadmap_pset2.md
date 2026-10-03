@@ -16,8 +16,8 @@ Modo de trabajo: James implementa; Claude guía, revisa y explica. Marcar `[x]` 
 
 Fase 3 (Silver) cerrada salvo los flags de quiebre de stock, que se dejaron para después de Spark (decisión 2-oct: Gold y Spark pesan 30 % y estaban en cero; los quiebres se agregan luego con un `left join` al fact sin rediseñar nada).
 
-1. **Fase 4 (Gold):** `fact_sales` desde `int_sales_daily`, `dim_item`, `dim_store`, `dim_date`, `bridge_snap` y tests de negocio.
-2. **Sáb 3-oct:** confirmar la semana 277 (ver Fase 1). Después: `dbt build -s stg_sales+`. OrbStack y Kestra deben estar encendidos.
+1. ~~Fase 4 (Gold)~~ ✅ 2-oct (falta solo el diagrama del star schema).
+2. **Sáb 3-oct:** confirmar la semana 277 (ver Fase 1). Después: `dbt build -s stg_sales+` (reconstruye Silver y Gold). OrbStack y Kestra deben estar encendidos.
 3. Fase 5 (Spark → OBT). Es el mayor riesgo: el conector Spark–Snowflake no está probado.
 4. `int_stockout_flags` (calidad #4): reglas conservadora y binomial negativa, con `k` **causal** (ventana expansiva hasta el día previo a la racha; el EDA usaba la serie completa → fuga). Recalcular los % y actualizar `calidad_datos.md` #4 y el §5 del enfoque.
 5. Documento (domingo).
@@ -32,7 +32,7 @@ Fase 3 (Silver) cerrada salvo los flags de quiebre de stock, que se dejaron para
 | 1 · Ingesta Kestra → Bronze (PDF §2) | ✅ Rediseñada (v2, 28-sep): Bronze guarda las entregas semanales tal cual (`SALES_RAW`, formato ancho, carga por nombre de columna). Backfill v2 terminado y verificado (29-sep). Falta la 277, que entra con el cron del 3-oct. |
 | 2 · Calidad (PDF §3) | ✅ Tests de contrato en Bronze y de unpivot en `stg_sales`, 4 analyses (`dbt/analyses/dq_0*`) y tabla de decisiones en `docs/calidad_datos.md`. Los flags se implementan en Silver. |
 | 3 · dbt Silver | 🔄 `stg_calendar`, `stg_sell_prices` e `int_sales_daily` (fecha, precio, ingreso, SNAP y flags #1, #2, #3, #5) listos y testeados. Falta `int_stockout_flags` (#4), pospuesto. |
-| 4 · dbt Gold (star schema) | ⬜ |
+| 4 · dbt Gold (star schema) | ✅ `fact_sales`, `dim_date`, `dim_item`, `dim_store` y `dim_date_state` (SNAP) en `GOLD`, 55 tests en verde (2-oct). Falta el diagrama. |
 | 5 · Spark → OBT | ⬜ |
 | 6 · Documento y README | ⬜ README al día hasta la ingesta. |
 
@@ -42,6 +42,7 @@ Fase 3 (Silver) cerrada salvo los flags de quiebre de stock, que se dejaron para
 - `SILVER.stg_sales` (dbt, incremental): las ventas en formato largo, una fila por `item_id` × `store_id` × `d`.
 - `SILVER.stg_calendar` (view), `SILVER.stg_sell_prices` (table, con `launch_wm_yr_wk`) y el seed `SILVER.store_closures`.
 - `SILVER.int_sales_daily` (table, ~30 s): ventas + fecha + precio + ingreso + SNAP + flags de calidad. Es la base de `fact_sales`.
+- `GOLD` (star schema, tables): `fact_sales` (item × tienda × día, 59 M filas), `dim_date` (1.969 días con horizonte, `week_seq`, `date_key_ly_364`), `dim_item` (3.049), `dim_store` (10) y `dim_date_state` (SNAP por fecha × estado, 5.907).
 - `LOAD_LOG` guarda la auditoría de cargas. En `@RAW_STAGE/m5/` están los CSV de Kaggle y en `@RAW_STAGE/m5/sales_weekly/` las entregas semanales.
 
 **Tareas que se pueden adelantar sin bloquear la ingesta.** Anota tu nombre en la tarea antes de empezar, para no duplicar trabajo.
@@ -128,10 +129,10 @@ Tareas:
 
 ## Fase 4 — dbt Gold (star schema, 15 %)
 
-- [ ] `fact_sales`: grain SKU–tienda–día; medidas: unidades, precio, ingreso; flags de calidad.
-- [ ] `dim_item`, `dim_store`, `dim_date` (índice secuencial de semana, flags de evento, `date_ly_364`, horizonte futuro), `bridge_snap` (fecha × estado).
-- [ ] Todo con `ref()`.
-- [ ] Tests con reglas reales del negocio:
+- [x] `fact_sales`: grain SKU–tienda–día; medidas: unidades, precio, ingreso; flags de calidad.
+- [x] `dim_item`, `dim_store`, `dim_date` (índice secuencial de semana, flags de evento, `date_ly_364`, horizonte futuro), `dim_date_state` (SNAP fecha × estado; se llamaba `bridge_snap`, pero no es un puente: la relación con el fact es muchos a uno).
+- [x] Todo con `ref()`.
+- [x] Tests con reglas reales del negocio (más: horizonte sin ventas, ingreso = unidades × precio, llave compuesta del SNAP, calendario sin huecos):
   - `relationships` fact → dims.
   - Unicidad del grain.
   - Ninguna venta sin precio.

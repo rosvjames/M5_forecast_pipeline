@@ -13,9 +13,78 @@ Kaggle → Kestra → BRONZE → dbt → SILVER → dbt → GOLD → Spark → O
 
 El enfoque del proyecto y las decisiones de diseño están en [`docs/enfoque_proyecto.md`](docs/enfoque_proyecto.md). El avance por fases está en [`docs/roadmap_pset2.md`](docs/roadmap_pset2.md).
 
-> **Estado actual (29-sep-2026):** infraestructura lista e ingesta a Bronze completa hasta la semana 276. `CALENDAR` y `SELL_PRICES` están cargadas, y `SALES_RAW` tiene las entregas semanales 0–276, que `SILVER.stg_sales` (dbt) pasa a formato largo. La semana 277 entra con el cron del sábado 3-oct. El retry y el bloque `errors` ya están demostrados, y el diagnóstico de calidad está en [`docs/calidad_datos.md`](docs/calidad_datos.md). El resto de Silver, Gold, la OBT y el documento están pendientes. Qué hay hecho y en qué se puede ayudar: [`docs/roadmap_pset2.md`](docs/roadmap_pset2.md#estado-actual-y-cómo-sumarse).
+> **Estado actual (2-oct-2026):** infraestructura lista e ingesta a Bronze completa hasta la semana 276 (la 277 entra con el cron del sábado 3-oct). Silver y el star schema de Gold están construidos y testeados con dbt; quedan pendientes los flags de quiebre de stock, la OBT en Spark y el documento. El diagnóstico de calidad está en [`docs/calidad_datos.md`](docs/calidad_datos.md). Qué hay hecho y en qué se puede ayudar: [`docs/roadmap_pset2.md`](docs/roadmap_pset2.md#estado-actual-y-cómo-sumarse).
 
 ---
+
+## Modelo de datos (Gold)
+
+Star schema en el esquema `GOLD`, construido con dbt desde Silver (`dbt/models/marts/`). Grain del hecho: **item × tienda × día**.
+
+```mermaid
+erDiagram
+    dim_date       ||--o{ fact_sales     : "date_key"
+    dim_item       ||--o{ fact_sales     : "item_id"
+    dim_store      ||--o{ fact_sales     : "store_id"
+    dim_date_state ||--o{ fact_sales     : "date_key + state_id"
+    dim_date       ||--|{ dim_date_state : "date_key"
+    dim_date       |o--o| dim_date       : "date_key_ly_364"
+
+    fact_sales {
+        int date_key PK,FK "YYYYMMDD"
+        string item_id PK,FK
+        string store_id PK,FK
+        string state_id FK "con date_key, hacia el SNAP"
+        int units "medida"
+        number sell_price "medida, NULL antes del lanzamiento"
+        number revenue "medida, units x sell_price"
+        boolean is_pre_launch "calidad 1"
+        boolean is_store_closed "calidad 3"
+        boolean is_sales_spike "calidad 5, solo diagnostico"
+        int week_idx "linaje: entrega semanal"
+    }
+    dim_date {
+        int date_key PK "YYYYMMDD"
+        date date UK
+        string d UK "d_1..d_1969"
+        int wm_yr_wk "semana Walmart, join de precios"
+        int week_seq "indice secuencial de semana"
+        int wday "1 = sabado"
+        string event_name_1
+        string event_type_1
+        boolean is_christmas_closed "calidad 2"
+        boolean is_forecast_horizon "d_1942..d_1969"
+        int date_key_ly_364 FK "mismo dia del anio anterior"
+    }
+    dim_item {
+        string item_id PK
+        string dept_id
+        string cat_id
+    }
+    dim_store {
+        string store_id PK
+        string state_id
+    }
+    dim_date_state {
+        int date_key PK,FK
+        string state_id PK
+        boolean is_snap
+    }
+```
+
+| Tabla | Filas | Contenido |
+|---|---|---|
+| `fact_sales` | 59,1 M | Unidades, precio vigente, ingreso y flags de calidad por serie × día |
+| `dim_date` | 1.969 | Calendario completo, incluye los 28 días del horizonte de pronóstico (sin ventas en el hecho) |
+| `dim_item` | 3.049 | Jerarquía item → departamento → categoría |
+| `dim_store` | 10 | Tienda → estado |
+| `dim_date_state` | 5.907 | SNAP por fecha × estado: depende de ambos, por eso no va en `dim_date` ni en `dim_store` |
+
+Decisiones:
+- Lo que depende solo de la fecha (eventos, Navidad, horizonte) está en `dim_date`, no repetido en el hecho.
+- `wm_yr_wk` no se resta (salta de 52 a 01 y el año fiscal 2013 tiene 53 semanas): para lags semanales se usa `week_seq`.
+- `date_key_ly_364` (t − 364) conserva el día de semana y es la base del baseline "año anterior".
+- Tests de negocio: grain único, relaciones hecho → dimensiones (incluida la llave compuesta del SNAP), mismo conteo que Silver, ninguna venta sin precio ni antes del lanzamiento, ninguna venta en el horizonte, `revenue = units × sell_price` y calendario sin huecos.
 
 ## Stack y versiones
 

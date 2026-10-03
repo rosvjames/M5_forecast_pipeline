@@ -1,0 +1,62 @@
+version: 2
+
+models:
+  - name: dim_date
+    description: >
+      Dimensión fecha: una fila por día (1.969, incluye el horizonte de pronóstico d_1942..d_1969).
+      Llave date_key = YYYYMMDD. Incluye semana Walmart, índice secuencial de semana, eventos,
+      cierre de Navidad y la fecha de comparación del año anterior (t − 364).
+    columns:
+      - name: date_key
+        description: "Llave YYYYMMDD"
+        data_tests:
+          - not_null
+          - unique
+      - name: date
+        data_tests:
+          - not_null
+          - unique
+      - name: d
+        description: "Llave natural de la fuente (d_1..d_1969)"
+        data_tests:
+          - not_null
+          - unique
+      - name: wm_yr_wk
+        description: "Semana Walmart (YYYWW). No restar: usar week_seq"
+        data_tests:
+          - not_null
+      - name: wm_week_of_year
+        data_tests:
+          - dbt_utils.accepted_range:
+              min_value: 1
+              max_value: 53
+      - name: week_seq
+        description: "Índice secuencial de semana Walmart (1..N), para lags y ventanas semanales"
+        data_tests:
+          - not_null
+      - name: wday
+        description: "1 = sábado … 7 = viernes"
+        data_tests:
+          - accepted_values:
+              values: [1, 2, 3, 4, 5, 6, 7]
+              quote: false
+      - name: n_events
+        data_tests:
+          - accepted_values:
+              values: [0, 1, 2]
+              quote: false
+      - name: is_christmas_closed
+        description: "25-dic, tiendas cerradas: excluir de entrenamiento y evaluación (calidad #2)"
+        data_tests:
+          - not_null
+      - name: is_forecast_horizon
+        description: "d_1942..d_1969: horizonte de pronóstico, sin ventas"
+        data_tests:
+          - not_null
+      - name: date_key_ly_364
+        description: "date_key de t − 364 (mismo día de semana del año anterior). NULL el primer año"
+        data_tests:
+          # Role-playing: apunta a la misma dimensión.
+          - relationships:
+              to: ref('dim_date')
+              field: date_key

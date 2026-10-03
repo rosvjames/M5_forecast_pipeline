@@ -30,3 +30,7 @@ models:
   m5_pipeline:
     staging:
       +materialized: view
+    # Gold: star schema. Tables porque Spark y BI las leen muchas veces; el schema GOLD sale del macro generate_schema_name.
+    marts:
+      +schema: gold
+      +materialized: table

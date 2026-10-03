@@ -1,0 +1,25 @@
+version: 2
+
+models:
+  - name: dim_date_state
+    description: >
+      SNAP por fecha × estado (5.907 filas). Se une con fact_sales por (date_key, state_id).
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [date_key, state_id]
+    columns:
+      - name: date_key
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_key
+      - name: state_id
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ['CA', 'TX', 'WI']
+      - name: is_snap
+        description: "Día con cupones SNAP en el estado"
+        data_tests:
+          - not_null

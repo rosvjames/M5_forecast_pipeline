@@ -1,0 +1,72 @@
+version: 2
+
+models:
+  - name: fact_sales
+    description: >
+      Ventas diarias. Grain: item × tienda × día. Medidas: unidades, precio vigente e ingreso;
+      flags de calidad por serie × día. Atributos de fecha en dim_date; SNAP en dim_date_state.
+    data_tests:
+      # Grain
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [item_id, store_id, date_key]
+      # Ninguna fila se pierde ni se duplica desde Silver (incluye el join de precios de int_sales_daily).
+      - dbt_utils.equal_rowcount:
+          compare_model: ref('int_sales_daily')
+      # Regla de negocio: ninguna venta antes del lanzamiento del producto en la tienda.
+      - dbt_utils.expression_is_true:
+          expression: "units = 0"
+          config:
+            where: "is_pre_launch"
+      # Regla de negocio: ninguna venta sin precio.
+      - dbt_utils.expression_is_true:
+          expression: "sell_price is not null"
+          config:
+            where: "units > 0"
+      # El ingreso cuadra con unidades × precio.
+      - dbt_utils.expression_is_true:
+          expression: "revenue = units * sell_price"
+          config:
+            where: "sell_price is not null"
+    columns:
+      - name: date_key
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_key
+      - name: item_id
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_item')
+              field: item_id
+      - name: store_id
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_store')
+              field: store_id
+      - name: state_id
+        description: "Con date_key, llave hacia dim_date_state (SNAP). Test en tests/assert_fact_sales_snap_join.sql"
+        data_tests:
+          - not_null
+      - name: units
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: sell_price
+        data_tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              inclusive: false
+      - name: is_pre_launch
+        data_tests:
+          - not_null
+      - name: is_store_closed
+        data_tests:
+          - not_null
+      - name: is_sales_spike
+        description: "Solo diagnóstico: no es feature, no filtra entrenamiento ni excluye días de la métrica principal"
+        data_tests:
+          - not_null

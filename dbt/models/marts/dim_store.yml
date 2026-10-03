@@ -1,0 +1,20 @@
+version: 2
+
+models:
+  - name: dim_store
+    description: "Dimensión tienda: una fila por tienda (10) con su estado."
+    data_tests:
+      # La tienda pertenece al estado de su código (CA_1 → CA).
+      - dbt_utils.expression_is_true:
+          expression: "startswith(store_id, state_id)"
+    columns:
+      - name: store_id
+        description: "Llave. unique también prueba que cada tienda tiene un solo estado"
+        data_tests:
+          - not_null
+          - unique
+      - name: state_id
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ['CA', 'TX', 'WI']
