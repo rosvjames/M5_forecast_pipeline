@@ -1,0 +1,40 @@
+version: 2
+
+models:
+  - name: stg_sell_prices
+    description: >
+      Precio promedio semanal por tienda × item × semana Walmart, con la semana de lanzamiento de cada serie.
+      Solo existen filas desde el lanzamiento: antes no hay precio porque el producto no estaba en la tienda.
+    data_tests:
+      # Grain: un precio por serie y semana. Si se rompe, el join con ventas multiplica filas.
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [store_id, item_id, wm_yr_wk]
+      # La semana de lanzamiento es la primera de la serie: ninguna fila puede ser anterior.
+      - dbt_utils.expression_is_true:
+          expression: "launch_wm_yr_wk <= wm_yr_wk"
+    columns:
+      - name: store_id
+        data_tests:
+          - not_null
+      - name: item_id
+        data_tests:
+          - not_null
+      - name: wm_yr_wk
+        description: "Semana Walmart (YYYWW); llave hacia stg_calendar.wm_yr_wk"
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_calendar')
+              field: wm_yr_wk
+      - name: sell_price
+        description: "Precio promedio semanal en USD; no es precio de lista (calidad #6)"
+        data_tests:
+          - not_null
+          # > 0 estricto: los 12 precios de $0,01 son válidos (calidad #7); un 0 o negativo no lo sería.
+          - dbt_utils.accepted_range:
+              min_value: 0
+              inclusive: false
+      - name: launch_wm_yr_wk
+        description: "Primera semana con precio de la serie = lanzamiento del producto en la tienda"
+        data_tests:
+          - not_null

@@ -1,0 +1,69 @@
+version: 2
+
+models:
+  - name: stg_calendar
+    description: >
+      Calendario M5 limpio: una fila por día (1.969, incluye el horizonte de pronóstico), con tipos,
+      eventos, SNAP como booleanos por estado y flags que dependen solo de la fecha.
+    data_tests:
+      # La conversión d → fecha de Silver es exacta: d_1 = 2011-01-29 y un día por d sin huecos.
+      - dbt_utils.expression_is_true:
+          expression: "date = dateadd(day, d_num - 1, '2011-01-29'::date)"
+    columns:
+      - name: d
+        description: "Día en formato d_N; llave hacia stg_sales.d"
+        data_tests:
+          - not_null
+          - unique
+      - name: d_num
+        description: "Número del día (1..1969)"
+        data_tests:
+          - not_null
+          - unique
+          - dbt_utils.accepted_range:
+              min_value: 1
+              max_value: 1969
+      - name: date
+        data_tests:
+          - not_null
+          - unique
+      - name: wm_yr_wk
+        description: "Semana Walmart (YYYWW); llave hacia sell_prices. No restar: el año fiscal 2013 tiene 53 semanas"
+        data_tests:
+          - not_null
+      - name: wday
+        description: "Día de la semana Walmart: 1 = sábado … 7 = viernes"
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [1, 2, 3, 4, 5, 6, 7]
+              quote: false
+      - name: event_type_1
+        data_tests:
+          - accepted_values:
+              values: ['Sporting', 'Cultural', 'National', 'Religious']
+      - name: event_type_2
+        data_tests:
+          - accepted_values:
+              values: ['Sporting', 'Cultural', 'National', 'Religious']
+      - name: is_event_day
+        description: "El día tiene al menos un evento (event_name_1 no nulo)"
+        data_tests:
+          - not_null
+      - name: is_snap_ca
+        data_tests:
+          - not_null
+      - name: is_snap_tx
+        data_tests:
+          - not_null
+      - name: is_snap_wi
+        data_tests:
+          - not_null
+      - name: is_christmas_closed
+        description: "25 de diciembre: tiendas cerradas. Excluir de entrenamiento y evaluación (calidad #2)"
+        data_tests:
+          - not_null
+      - name: is_forecast_horizon
+        description: "d_1942..d_1969: horizonte de pronóstico, sin ventas"
+        data_tests:
+          - not_null
