@@ -1,0 +1,3 @@
+store_id,date,units,reason
+WI_1,2011-02-02,2,Cierre puntual: venta < 10 % de la mediana movil de 29 dias (dq_02)
+TX_2,2015-03-24,131,Cierre puntual: venta < 10 % de la mediana movil de 29 dias (dq_02)

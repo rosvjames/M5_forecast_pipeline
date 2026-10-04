@@ -24,7 +24,7 @@ Fase 3 (Silver) cerrada salvo los flags de quiebre de stock, que se dejaron para
 
 ## Estado actual y cómo sumarse
 
-*Actualizado: 2-oct-2026.*
+*Actualizado: 4-oct-2026.*
 
 | Fase (PDF) | Estado |
 |---|---|
@@ -32,9 +32,10 @@ Fase 3 (Silver) cerrada salvo los flags de quiebre de stock, que se dejaron para
 | 1 · Ingesta Kestra → Bronze (PDF §2) | ✅ Rediseñada (v2, 28-sep): Bronze guarda las entregas semanales tal cual (`SALES_RAW`, formato ancho, carga por nombre de columna). Backfill v2 terminado y verificado (29-sep). Semana 277 cargada el 3-oct por ejecución de API (el tick del cron no disparó; ver Fase 1): 278 semanas, 8.476.220 filas. |
 | 2 · Calidad (PDF §3) | ✅ Tests de contrato en Bronze y de unpivot en `stg_sales`, 4 analyses (`dbt/analyses/dq_0*`) y tabla de decisiones en `docs/calidad_datos.md`. Los flags se implementan en Silver. |
 | 3 · dbt Silver | 🔄 `stg_calendar`, `stg_sell_prices` e `int_sales_daily` (fecha, precio, ingreso, SNAP y flags #1, #2, #3, #5) listos y testeados. Falta `int_stockout_flags` (#4), pospuesto. |
-| 4 · dbt Gold (star schema) | ✅ `fact_sales`, `dim_date`, `dim_item`, `dim_store` y `dim_date_state` (SNAP) en `GOLD`, 55 tests en verde y diagrama en el README (2-oct). |
+| 4 · dbt Gold (star schema) | ✅ `fact_sales`, `dim_date`, `dim_item`, `dim_store` y `dim_date_state` (SNAP) en `GOLD`, diagrama en el README (2-oct); 118 tests en verde en todo el proyecto (4-oct). |
 | 5 · Spark → OBT | ✅ `spark/build_obt.py` (conector `spark-snowflake` 3.2.2 en `spark/Dockerfile`): `OBT.OBT_SALES`, 59.181.090 filas (278 semanas), validaciones OK (4-oct, ~13 min). |
-| 6 · Documento y README | ⬜ README al día hasta la ingesta. |
+| Orquestación de punta a punta | ✅ Flow `transform` (4-oct): se dispara al terminar `load_sales_week` y corre `dbt build` y luego `spark-submit build_obt.py`. Detalle en el paso 10 del README. |
+| 6 · Documento y README | ✅ Memo en PDF (`PSet2_memo_*.pdf`) y README con los pasos 1–10 (4-oct). Falta probar el README en una cuenta limpia. |
 
 **Qué hay en Snowflake:**
 - `BRONZE.CALENDAR` y `BRONZE.SELL_PRICES`: valores originales de Kaggle cargados por nombre de columna, más `_source_file`, `_batch_id` y `_loaded_at`.
@@ -147,15 +148,15 @@ Tareas:
 - [x] Validar joins: conteo antes = después, unicidad de la llave, nulos en columnas de dims = 0, estado fact = estado `dim_store`. Si algo falla, no escribe.
 - [x] Escribir en `OBT` de Snowflake (`OBT_SALES`, overwrite con tabla de staging) y verificar el conteo leyendo de vuelta.
 - [x] Re-corrida tras la semana 277 (4-oct): `dbt build -s stg_sales+` (`stg_sales` y `fact_sales` con 59.181.090 filas, SUM 66.927.173) y `build_obt.py` → `OBT.OBT_SALES` con 59.181.090 filas, todas las validaciones OK, 756 s. Ojo: tras suspender la Mac el worker de Spark se desregistra del master (el job queda esperando recursos); se arregla con `docker compose restart spark-worker`.
-- [ ] Explicar cuándo usar el star schema (análisis, BI, dbt tests) y cuándo la OBT (entrenar el modelo).
+- [x] Explicar cuándo usar el star schema (análisis, BI, dbt tests) y cuándo la OBT (entrenar el modelo).
 
 ## Fase 6 — Documento técnico (≤ 6 páginas) y README
 
 - [x] Diagrama de arquitectura: `docs/img/arquitectura.png` (fuente `arquitectura.py` → SVG), insertado en el README.
-- [ ] Secciones: Arquitectura, Ingesta, Data Quality, Transformaciones y modelado, Spark y OBT, Batch vs streaming, Limitaciones.
-- [ ] Batch vs streaming: M5 es diario/histórico y la decisión (reposición semanal) tolera latencia de días. Streaming solo se justificaría con reposición intradía, inventario en tiempo real o alertas de quiebre.
+- [x] Secciones: Arquitectura, Ingesta, Data Quality, Transformaciones y modelado, Spark y OBT, Batch vs streaming, Limitaciones.
+- [x] Batch vs streaming: M5 es diario/histórico y la decisión (reposición semanal) tolera latencia de días. Streaming solo se justificaría con reposición intradía, inventario en tiempo real o alertas de quiebre.
 - [ ] README: cómo levantar la infraestructura y ejecutar Kestra, dbt y Spark paso a paso. Probarlo desde cero.
-- [ ] Nombre del archivo: `PSet2_memo_<apellido_1>_<apellido_2>.pdf`.
+- [x] Nombre del archivo: `PSet2_memo_<apellido_1>_<apellido_2>.pdf`.
 
 **Decisiones revisadas (contar en la sección Ingesta y en Limitaciones):**
 - **Ingesta v1 → v2 (28-sep, feedback de Erick).** v1 hacía el `UNPIVOT` en la ingesta y leía las columnas por posición (`$n`): un cambio de formato en la fuente habría corrompido datos sin error. v2 guarda la entrega tal cual en `SALES_RAW` (formato ancho, `COPY` por nombre de columna, schema evolution) y hace el unpivot en dbt (`stg_sales`). Se validó que v2 reproduce v1: mismas 59.120.110 filas, mismo SUM y mismas cifras de calidad.

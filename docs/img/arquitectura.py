@@ -76,6 +76,9 @@ s.append(arrow(690, 250, 600, 408, True)); s.append(arrow(730, 250, 815, 408, Tr
 s.append(label(710, 318, ["ejecuta SQL", "y tests"]))
 s.append(arrow(870, 408, 960, 252)); s.append(label(858, 318, ["lee Gold"], "end"))
 s.append(arrow(1100, 250, 1100, 408)); s.append(label(1090, 312, ["joins + validaciones,", "escribe la OBT"], "end"))
+# Orquestación: al terminar cada carga, el flow transform de Kestra lanza dbt build y luego spark-submit.
+s.append(arrow(465, 205, 598, 205)); s.append(label(532, 196, ["flow transform"])); s.append(label(532, 224, ["lanza dbt build"]))
+s.append(arrow(820, 205, 913, 205)); s.append(label(867, 196, ["y luego"])); s.append(label(867, 224, ["spark-submit"]))
 s.append('</svg>')
 
 Path(__file__).with_name("arquitectura.svg").write_text("\n".join(s))

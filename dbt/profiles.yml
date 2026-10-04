@@ -9,5 +9,6 @@ m5_pipeline:          # debe coincidir con profile: en dbt_project.yml
       warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE') }}"
       database: "{{ env_var('SNOWFLAKE_DATABASE') }}"
       schema: SILVER
-      private_key_path: /secrets/rsa_key.p8   # ruta DENTRO del contenedor (montada en docker-compose)
+      # Ruta DENTRO del contenedor: montada en docker-compose; el flow transform de Kestra pasa la suya.
+      private_key_path: "{{ env_var('DBT_PRIVATE_KEY_PATH', '/secrets/rsa_key.p8') }}"
       threads: 4

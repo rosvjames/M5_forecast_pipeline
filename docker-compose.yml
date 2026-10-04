@@ -29,6 +29,9 @@ services:
       - /tmp/kestra-wd:/tmp/kestra-wd
       # Flows versionados. Nombre de archivo obligatorio: <tenant>_<namespace>_<id>.yml (ej. main_m5.pipeline_hello.yml)
       - ./kestra:/app/flows
+      # Flow transform: Kestra copia el proyecto dbt a la carpeta de trabajo de la tarea y le pasa la llave.
+      - ./dbt:/app/dbt:ro
+      - ${SNOWFLAKE_PRIVATE_KEY_PATH}:/secrets/rsa_key.p8:ro
     environment:
       # Config no secreta de Snowflake, reutilizando las variables de .env.
       # Kestra expone las variables ENV_* en los flows como {{ envs.snowflake_account }}, etc.
@@ -70,6 +73,12 @@ services:
           # No cargar los flows de ejemplo ("Getting Started") al iniciar
           tutorial-flows:
             enabled: false
+          # Flow transform: la tarea de Spark monta el socket de Docker para hacer docker exec en spark-master.
+          plugins:
+            configurations:
+              - type: io.kestra.plugin.scripts.runner.docker.Docker
+                values:
+                  volume-enabled: true
     ports:
       - "8080:8080"
       # The following is the management port, not exposed by default.

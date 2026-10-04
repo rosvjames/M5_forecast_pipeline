@@ -1,0 +1,154 @@
+id: transform
+namespace: m5.pipeline
+description: Flow 3. Transformación de punta a punta después de cada carga semanal. dbt build (Silver + Gold + tests) y luego el job de Spark que construye OBT.OBT_SALES. Se dispara solo cuando load_sales_week termina en SUCCESS.
+
+# Una sola a la vez: dbt y Spark reescriben las mismas tablas. Las que sobran esperan su turno.
+concurrency:
+  limit: 1
+  behavior: QUEUE
+
+# Mismo ancla que load_sales_week: sirve para saber qué semana "toca" hoy según el reloj simulado.
+variables:
+  anchor_date: "2021-06-12 00:00:00"
+
+inputs:
+  # Para reconstruir a mano aunque Bronze no esté al día (p. ej. después de cambiar un modelo).
+  - id: force
+    type: BOOL
+    defaults: false
+    description: Construye Silver, Gold y la OBT sin revisar si Bronze está al día.
+
+pluginDefaults:
+  - type: io.kestra.plugin.jdbc.snowflake
+    values:
+      url: "jdbc:snowflake://{{ envs.snowflake_account }}.snowflakecomputing.com/?MULTI_STATEMENT_COUNT=0"
+      username: "{{ envs.snowflake_user }}"
+      privateKey: "{{ secret('SNOWFLAKE_PRIVATE_KEY') }}"
+      role: "{{ envs.snowflake_role }}"
+      warehouse: "{{ envs.snowflake_warehouse }}"
+      database: "{{ envs.snowflake_database }}"
+
+tasks:
+  # ¿Bronze está al día? Están todas las semanas 0..k, con k = la semana que toca hoy (tope 277).
+  # Un backfill lanza una carga por semana y cada una dispara este flow: sin esta compuerta se
+  # reconstruiría todo 278 veces (≈ 15 min cada una). Así solo construye la que completa Bronze.
+  # SYSDATE() está en UTC, igual que el ancla. 604800 = segundos en una semana.
+  - id: bronze_state
+    type: io.kestra.plugin.jdbc.snowflake.Query
+    fetchType: FETCH_ONE
+    sql: |
+      WITH due AS (
+        SELECT LEAST(277, FLOOR(DATEDIFF('second', '{{ vars.anchor_date }}'::TIMESTAMP_NTZ, SYSDATE()) / 604800)) AS k
+      )
+      SELECT due.k                                    AS "due_week",
+             COUNT(DISTINCT s.week_idx)               AS "weeks_loaded",
+             COUNT(DISTINCT s.week_idx) = due.k + 1   AS "is_current"
+      FROM due
+      LEFT JOIN M5.BRONZE.SALES_RAW s ON s.week_idx <= due.k
+      GROUP BY due.k
+    retry:
+      type: exponential
+      interval: PT10S
+      maxInterval: PT2M
+      maxAttempts: 3
+
+  - id: if_current
+    type: io.kestra.plugin.core.flow.If
+    condition: "{{ inputs.force or outputs.bronze_state.row.is_current }}"
+    then:
+      # ---------- dbt: Bronze → Silver → Gold ----------
+      # Las dos tareas comparten carpeta de trabajo: la primera copia el proyecto, la segunda lo ejecuta.
+      - id: dbt
+        type: io.kestra.plugin.core.flow.WorkingDirectory
+        tasks:
+          # Corre dentro del contenedor de Kestra, que tiene montados ./dbt y la llave (docker-compose.yml).
+          # No se copian target/, logs/ ni dbt_packages/: son artefactos de corridas locales.
+          - id: copy_project
+            type: io.kestra.plugin.scripts.shell.Commands
+            taskRunner:
+              type: io.kestra.plugin.core.runner.Process
+            commands:
+              - tar -C /app/dbt --exclude=./target --exclude=./logs --exclude=./dbt_packages -cf - . | tar -xf - -C .
+              - cp /secrets/rsa_key.p8 ./rsa_key.p8 && chmod 644 ./rsa_key.p8
+
+          # Misma imagen y versión que el servicio dbt de docker-compose. build = seed + modelos + tests:
+          # si un test falla, la tarea falla y Spark no llega a correr sobre un Gold inválido.
+          # stg_sales es incremental (solo procesa las semanas nuevas o recargadas); el resto se reconstruye.
+          - id: dbt_build
+            type: io.kestra.plugin.dbt.cli.DbtCLI
+            containerImage: ghcr.io/dbt-labs/dbt-snowflake:1.9.0
+            taskRunner:
+              type: io.kestra.plugin.scripts.runner.docker.Docker
+              pullPolicy: IF_NOT_PRESENT
+            env:
+              SNOWFLAKE_ACCOUNT: "{{ envs.snowflake_account }}"
+              SNOWFLAKE_USER: "{{ envs.snowflake_user }}"
+              SNOWFLAKE_ROLE: "{{ envs.snowflake_role }}"
+              SNOWFLAKE_WAREHOUSE: "{{ envs.snowflake_warehouse }}"
+              SNOWFLAKE_DATABASE: "{{ envs.snowflake_database }}"
+              # Relativa a la carpeta de trabajo, que es donde corre dbt.
+              DBT_PRIVATE_KEY_PATH: rsa_key.p8
+            commands:
+              - dbt deps
+              - dbt build
+            timeout: PT30M
+            # Retry seguro: los modelos son tablas que se reemplazan o un incremental delete+insert.
+            retry:
+              type: constant
+              interval: PT1M
+              maxAttempts: 2
+
+      # ---------- Spark: Gold → OBT ----------
+      # El job corre en el cluster de docker-compose: spark-submit dentro de spark-master (el driver), que ya
+      # tiene los jars del conector y la llave. Kestra lo lanza con docker exec a través del socket de Docker.
+      # build_obt.py valida los joins antes de escribir y termina con error si algo falla: la tarea falla igual.
+      - id: spark_obt
+        type: io.kestra.plugin.scripts.shell.Commands
+        containerImage: docker:27-cli
+        taskRunner:
+          type: io.kestra.plugin.scripts.runner.docker.Docker
+          pullPolicy: IF_NOT_PRESENT
+          volumes:
+            - /var/run/docker.sock:/var/run/docker.sock
+        commands:
+          - |
+            MASTER=$(docker ps -q -f label=com.docker.compose.service=spark-master | head -n 1)
+            if [ -z "$MASTER" ]; then echo "No hay un contenedor spark-master corriendo"; exit 1; fi
+            # Sin worker registrado, spark-submit se queda esperando recursos hasta el timeout (pasa cuando el
+            # equipo entra en reposo y el worker pierde la conexión). Se reinicia el worker y se vuelve a revisar.
+            alive() { docker exec "$MASTER" curl -s http://localhost:8080/json/ | grep -o '"aliveworkers" *: *[0-9]*' | grep -o '[0-9]*$'; }
+            if [ "$(alive)" = "0" ]; then
+              echo "El master no tiene workers: se reinicia spark-worker"
+              docker restart $(docker ps -aq -f label=com.docker.compose.service=spark-worker) && sleep 20
+              if [ "$(alive)" = "0" ]; then echo "El worker no se registró en el master"; exit 1; fi
+            fi
+            docker exec "$MASTER" /opt/spark/bin/spark-submit \
+              --master spark://spark-master:7077 --driver-memory 2g --executor-memory 3g \
+              /opt/spark-apps/build_obt.py
+        timeout: PT45M
+        # Retry seguro: la escritura es overwrite con tabla de staging; un intento fallido no deja la OBT a medias.
+        retry:
+          type: constant
+          interval: PT1M
+          maxAttempts: 2
+    else:
+      - id: bronze_not_current
+        type: io.kestra.plugin.core.log.Log
+        message: "Bronze aún no está al día ({{ outputs.bronze_state.row.weeks_loaded }} semanas cargadas, se esperan hasta la {{ outputs.bronze_state.row.due_week }}). No se construye nada."
+
+errors:
+  - id: log_failure
+    type: io.kestra.plugin.core.log.Log
+    level: ERROR
+    message: "Falló {{ flow.id }}: {{ errorLogs()[0].message ?? 'sin mensaje' }}"
+
+# Encadena la transformación con la ingesta: cada carga semanal exitosa dispara este flow.
+triggers:
+  - id: after_load
+    type: io.kestra.plugin.core.trigger.Flow
+    preconditions:
+      id: load_ok
+      flows:
+        - namespace: m5.pipeline
+          flowId: load_sales_week
+          states: [SUCCESS]

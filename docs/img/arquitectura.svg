@@ -80,4 +80,10 @@
 <line x1="1100" y1="250" x2="1100" y2="408" class="arr" marker-end="url(#ah)"/>
 <text x="1090" y="312" text-anchor="end" class="lbl">joins + validaciones,</text>
 <text x="1090" y="327" text-anchor="end" class="lbl">escribe la OBT</text>
+<line x1="465" y1="205" x2="598" y2="205" class="arr" marker-end="url(#ah)"/>
+<text x="532" y="196" text-anchor="middle" class="lbl">flow transform</text>
+<text x="532" y="224" text-anchor="middle" class="lbl">lanza dbt build</text>
+<line x1="820" y1="205" x2="913" y2="205" class="arr" marker-end="url(#ah)"/>
+<text x="867" y="196" text-anchor="middle" class="lbl">y luego</text>
+<text x="867" y="224" text-anchor="middle" class="lbl">spark-submit</text>
 </svg>

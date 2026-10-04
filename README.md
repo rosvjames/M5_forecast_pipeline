@@ -7,7 +7,7 @@ Kaggle → Kestra → BRONZE → dbt → SILVER → dbt → GOLD → Spark → O
                   └──────────────── Snowflake (base M5) ───────────┘
 ```
 
-- **Kestra** orquesta la ingesta desde la API de Kaggle hacia la capa Bronze.
+- **Kestra** orquesta todo: ingiere desde la API de Kaggle hacia la capa Bronze y, después de cada carga semanal, lanza dbt y Spark (flow `transform`).
 - **dbt** limpia (Silver) y modela el star schema (Gold).
 - **Spark** construye la One Big Table (OBT) a partir de Gold y la escribe de vuelta en Snowflake.
 
@@ -17,7 +17,7 @@ Kestra, dbt y Spark corren en contenedores locales (Docker Compose); los datos v
 
 El enfoque del proyecto y las decisiones de diseño están en [`docs/enfoque_proyecto.md`](docs/enfoque_proyecto.md). El avance por fases está en [`docs/roadmap_pset2.md`](docs/roadmap_pset2.md).
 
-> **Estado actual (4-oct-2026):** pipeline completo de punta a punta con las 278 semanas: Bronze (`SALES_RAW`, 8.476.220 filas), Silver y star schema de Gold construidos y testeados con dbt (59.181.090 filas en `fact_sales`), y `OBT.OBT_SALES` construida con Spark con las mismas 59.181.090 filas. Pendiente: flags de quiebre de stock (`int_stockout_flags`) y el documento. El diagnóstico de calidad está en [`docs/calidad_datos.md`](docs/calidad_datos.md) y el avance en [`docs/roadmap_pset2.md`](docs/roadmap_pset2.md#estado-actual-y-cómo-sumarse).
+> **Estado actual (4-oct-2026):** pipeline completo de punta a punta con las 278 semanas: Bronze (`SALES_RAW`, 8.476.220 filas), Silver y star schema de Gold construidos y testeados con dbt (59.181.090 filas en `fact_sales`), y `OBT.OBT_SALES` construida con Spark con las mismas 59.181.090 filas. Kestra encadena la carga semanal con dbt y Spark (flow `transform`). Pendiente: flags de quiebre de stock (`int_stockout_flags`), declarados como limitación en el documento técnico. El diagnóstico de calidad está en [`docs/calidad_datos.md`](docs/calidad_datos.md) y el avance en [`docs/roadmap_pset2.md`](docs/roadmap_pset2.md#estado-actual-y-cómo-sumarse).
 
 ---
 
@@ -77,7 +77,7 @@ erDiagram
 
 | Tabla | Filas | Contenido |
 |---|---|---|
-| `fact_sales` | 59,1 M | Unidades, precio vigente, ingreso y flags de calidad por serie × día |
+| `fact_sales` | 59,2 M | Unidades, precio vigente, ingreso y flags de calidad por serie × día |
 | `dim_date` | 1.969 | Calendario completo, incluye los 28 días del horizonte de pronóstico (sin ventas en el hecho) |
 | `dim_item` | 3.049 | Jerarquía item → departamento → categoría |
 | `dim_store` | 10 | Tienda → estado |
@@ -232,7 +232,7 @@ dbt no aparece en esta tabla porque no queda corriendo: se ejecuta a demanda (ve
      /opt/spark/examples/src/main/python/pi.py 10
    ```
    Debe imprimir `Pi is roughly 3.14...`.
-4. **Spark → Snowflake:** lee `GOLD.DIM_STORE` con el conector (requiere Gold construido):
+4. **Spark → Snowflake:** lee `GOLD.DIM_STORE` con el conector (requiere Gold construido: hazlo después del paso 8):
    ```bash
    docker compose exec spark-master /opt/spark/bin/spark-submit \
      --master spark://spark-master:7077 /opt/spark-apps/test_connection.py
@@ -241,7 +241,7 @@ dbt no aparece en esta tabla porque no queda corriendo: se ejecuta a demanda (ve
 
 ### 7. Cargar la capa Bronze (ingesta)
 
-Hay dos flows en el namespace `m5.pipeline`:
+La ingesta usa dos flows del namespace `m5.pipeline` (el tercero, `transform`, está en el [paso 10](#10-orquestación-de-punta-a-punta-kestra)):
 
 | Flow | Qué hace | Cuándo corre |
 |---|---|---|
@@ -269,10 +269,7 @@ Hay dos flows en el namespace `m5.pipeline`:
    -- Con las 278 semanas:      8.476.220 | 278 | 0 | 277 | 0
    ```
    `M5.BRONZE.LOAD_LOG` guarda una fila por carga (ejecución, tabla, semana, filas y estado).
-4. Cuando el backfill haya terminado, pasa las ventas a formato largo con dbt (~2 min la primera vez):
-   ```bash
-   docker compose run --rm dbt build -s stg_sales+ source:bronze
-   ```
+4. Cuando el backfill haya terminado, construye el proyecto dbt (paso 8). El paso a formato largo de las ventas (`stg_sales`) tarda ~2 min la primera vez. Para comprobarlo:
    ```sql
    SELECT COUNT(*), SUM(sales) FROM M5.SILVER.STG_SALES;
    -- Con el backfill hasta hoy: 59.120.110 | 66.821.317
@@ -295,6 +292,45 @@ SELECT COUNT(*) FROM M5.BRONZE.SALES_RAW WHERE week_idx = 100;   -- 30.490
 SELECT status, error_message, loaded_at FROM M5.BRONZE.LOAD_LOG
 WHERE week_idx = 100 ORDER BY loaded_at DESC LIMIT 3;
 ```
+
+### 8. Construir Silver y Gold (dbt)
+
+Con Bronze completo, instala los paquetes de dbt (una sola vez) y construye todo el proyecto: el seed `store_closures`, los modelos de Silver y Gold y los 118 tests, en orden de dependencias.
+
+```bash
+docker compose run --rm dbt deps
+docker compose run --rm dbt build
+```
+
+```sql
+SELECT COUNT(*), SUM(units) FROM M5.GOLD.FACT_SALES;   -- 59.181.090 | 66.927.173 con las 278 semanas
+```
+
+Esta corrida a mano solo hace falta la primera vez o para desarrollar: después de cada carga semanal, Kestra ejecuta `dbt build` por su cuenta (paso 10).
+
+### 9. Construir la OBT (Spark)
+
+```bash
+docker compose exec spark-master /opt/spark/bin/spark-submit \
+  --master spark://spark-master:7077 --driver-memory 2g --executor-memory 3g \
+  /opt/spark-apps/build_obt.py
+```
+
+Tarda unos 13 minutos e imprime las validaciones de los joins. Al terminar, `M5.OBT.OBT_SALES` tiene las mismas filas que `fact_sales`. Detalle en [Spark](#spark).
+
+### 10. Orquestación de punta a punta (Kestra)
+
+El flow `transform` encadena la transformación con la ingesta. No hay que lanzarlo: su trigger de tipo Flow lo dispara cada vez que `load_sales_week` termina en `SUCCESS`.
+
+| Tarea | Qué hace |
+|---|---|
+| `bronze_state` | Consulta si Bronze está al día: están todas las semanas 0..k, donde k es la semana que toca hoy según el reloj simulado (tope 277). Si no, el flow termina sin construir nada. Así un backfill de 278 cargas dispara una sola reconstrucción, la de la última semana. |
+| `copy_project` + `dbt_build` | Copia `dbt/` a la carpeta de trabajo y ejecuta `dbt deps` y `dbt build` en un contenedor con la misma imagen del servicio `dbt`. Si un test falla, el flow falla y Spark no corre. |
+| `spark_obt` | Lanza `spark-submit build_obt.py` dentro de `spark-master` con `docker exec`, a través del socket de Docker. |
+
+Para reconstruir a mano (por ejemplo, después de cambiar un modelo), ejecuta `transform` desde la UI con `force = true`: se salta la revisión de Bronze. Tiene `concurrency: 1`, timeouts y un reintento en dbt y en Spark; ambos pasos son idempotentes.
+
+Requisitos, ya incluidos en `docker-compose.yml`: el contenedor de Kestra monta `./dbt` y la llave privada (solo lectura), y el runner de Docker tiene `volume-enabled: true` para poder montar el socket. Si vienes de una versión anterior del repositorio, recrea el contenedor con `docker compose up -d kestra`.
 
 ---
 

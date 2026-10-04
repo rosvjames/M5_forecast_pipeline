@@ -121,7 +121,7 @@ Ventas posiblemente perdidas (**cota superior**): entre 8,8 % y 12,7 % de las un
 
 **Implementación:**
 
-- Columnas en Silver: `is_suspected_stockout_conservative` y `is_suspected_stockout_nb`.
+- Columnas previstas en Silver: `is_suspected_stockout_conservative` y `is_suspected_stockout_nb`. **Aún no implementadas** (al 4-oct-2026): las cifras de la tabla son del EDA, con un `k` no causal, y se recalcularán con ventana causal.
 - Análisis de sensibilidad: métricas con esos días (a) incluidos, (b) excluidos de la evaluación y (c) imputados.
 - Se declara como limitación: el nivel de servicio logrado en backtesting es optimista, porque se mide contra ventas y no contra demanda.
 
@@ -166,7 +166,7 @@ Complementos opcionales, no para el PSet 2: FreshRetailNet para validar la regla
 
 - Ingerir `sales_train_evaluation.csv`, `sell_prices.csv` y `calendar.csv`. `sales_train_validation` es un prefijo exacto de evaluation (0 diferencias en 58 M de celdas); `sample_submission` está todo en ceros.
 - Descarga con la API de Kaggle desde Kestra (`kaggle competitions download -c m5-forecasting-accuracy`), con el token en un secret.
-- Dataset estático → simular cargas con un reloj semanal: la semana k carga d_(7k+1)..d_(7k+7). Backfill de las semanas 0–276 (d_1..d_1939); la 277 (d_1940–1941) entra con el cron del sábado 2026-10-03.
+- Dataset estático → simular cargas con un reloj semanal: la semana k carga d_(7k+1)..d_(7k+7). Backfill de las semanas 0–276 (d_1..d_1939); la 277 (d_1940–1941) estaba prevista para el cron del sábado 2026-10-03; el tick no disparó y se cargó ese día ejecutando el flow por la API. El 4-oct, al volver a guardar el flow, el trigger recuperó ese tick, recargó la semana sin duplicar y encadenó `transform` (dbt + Spark).
 - Bronze guarda cada entrega tal como la publica la fuente (decisión revisada el 28-sep, tras el feedback de Erick): un simulador publica cada semana un CSV ancho (jerarquía + sus 7 columnas `d_N`) y Kestra lo copia a `BRONZE.SALES_RAW` **por nombre de columna** (`MATCH_BY_COLUMN_NAME` + schema evolution). El paso a formato largo se hace en dbt (`stg_sales`). Así, si la fuente reordena o agrega columnas, la ingesta no corrompe datos. La primera versión hacía el `UNPIVOT` en la ingesta leyendo columnas por posición.
 - Llaves naturales para idempotencia: ventas en Bronze (item_id, store_id, week_idx) y en Silver (item_id, store_id, d); precios (store_id, item_id, wm_yr_wk).
 

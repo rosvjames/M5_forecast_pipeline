@@ -6,6 +6,7 @@ dbt_packages/
 
 # Data
 *.csv
+!dbt/seeds/*.csv
 *.parquet
 *.zip
 
