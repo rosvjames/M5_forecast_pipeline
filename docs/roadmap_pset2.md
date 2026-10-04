@@ -17,8 +17,8 @@ Modo de trabajo: James implementa; Claude guía, revisa y explica. Marcar `[x]` 
 Fase 3 (Silver) cerrada salvo los flags de quiebre de stock, que se dejaron para después de Spark (decisión 2-oct: Gold y Spark pesan 30 % y estaban en cero; los quiebres se agregan luego con un `left join` al fact sin rediseñar nada).
 
 1. ~~Fase 4 (Gold)~~ ✅ 2-oct, con diagrama en el README.
-2. **Sáb 3-oct:** confirmar la semana 277 (ver Fase 1). Después: `dbt build -s stg_sales+` (reconstruye Silver y Gold). OrbStack y Kestra deben estar encendidos.
-3. ~~Fase 5 (Spark → OBT)~~ ✅ 2-oct. Queda re-correrla tras la semana 277.
+2. ~~Semana 277 y `dbt build -s stg_sales+`~~ ✅ 3 y 4-oct.
+3. ~~Fase 5 (Spark → OBT)~~ ✅ re-corrida el 4-oct con la semana 277.
 4. `int_stockout_flags` (calidad #4): reglas conservadora y binomial negativa, con `k` **causal** (ventana expansiva hasta el día previo a la racha; el EDA usaba la serie completa → fuga). Recalcular los % y actualizar `calidad_datos.md` #4 y el §5 del enfoque.
 5. Documento (domingo).
 
@@ -28,12 +28,12 @@ Fase 3 (Silver) cerrada salvo los flags de quiebre de stock, que se dejaron para
 
 | Fase (PDF) | Estado |
 |---|---|
-| 0 · Infraestructura (PDF §1) | ✅ Docker Compose con Kestra, Spark y dbt, conectado a Snowflake. Falta el diagrama. |
-| 1 · Ingesta Kestra → Bronze (PDF §2) | ✅ Rediseñada (v2, 28-sep): Bronze guarda las entregas semanales tal cual (`SALES_RAW`, formato ancho, carga por nombre de columna). Backfill v2 terminado y verificado (29-sep). Falta la 277, que entra con el cron del 3-oct. |
+| 0 · Infraestructura (PDF §1) | ✅ Docker Compose con Kestra, Spark y dbt, conectado a Snowflake. Diagrama en `docs/img/arquitectura.png`. |
+| 1 · Ingesta Kestra → Bronze (PDF §2) | ✅ Rediseñada (v2, 28-sep): Bronze guarda las entregas semanales tal cual (`SALES_RAW`, formato ancho, carga por nombre de columna). Backfill v2 terminado y verificado (29-sep). Semana 277 cargada el 3-oct por ejecución de API (el tick del cron no disparó; ver Fase 1): 278 semanas, 8.476.220 filas. |
 | 2 · Calidad (PDF §3) | ✅ Tests de contrato en Bronze y de unpivot en `stg_sales`, 4 analyses (`dbt/analyses/dq_0*`) y tabla de decisiones en `docs/calidad_datos.md`. Los flags se implementan en Silver. |
 | 3 · dbt Silver | 🔄 `stg_calendar`, `stg_sell_prices` e `int_sales_daily` (fecha, precio, ingreso, SNAP y flags #1, #2, #3, #5) listos y testeados. Falta `int_stockout_flags` (#4), pospuesto. |
 | 4 · dbt Gold (star schema) | ✅ `fact_sales`, `dim_date`, `dim_item`, `dim_store` y `dim_date_state` (SNAP) en `GOLD`, 55 tests en verde y diagrama en el README (2-oct). |
-| 5 · Spark → OBT | ✅ `spark/build_obt.py` (conector `spark-snowflake` 3.2.2 en `spark/Dockerfile`): `OBT.OBT_SALES`, 59.120.110 filas, validaciones OK (2-oct, ~13 min). Falta re-correr tras la semana 277. |
+| 5 · Spark → OBT | ✅ `spark/build_obt.py` (conector `spark-snowflake` 3.2.2 en `spark/Dockerfile`): `OBT.OBT_SALES`, 59.181.090 filas (278 semanas), validaciones OK (4-oct, ~13 min). |
 | 6 · Documento y README | ⬜ README al día hasta la ingesta. |
 
 **Qué hay en Snowflake:**
@@ -100,7 +100,7 @@ Tareas:
 - [x] Backfill v2 (`SALES_RAW`) terminado y verificado (29-sep): 277 ejecuciones en SUCCESS (label `backfill: v2-sales-raw`, 2 h 44 min, mediana 28 s por semana); 8.445.730 filas, 30.490 por semana, un lote por semana, 0 `_loaded_at` NULL; `stg_sales` con 59.120.110 filas y SUM 66.821.317, 23/23 tests PASS; `dq_01`–`dq_04` idénticas. `BRONZE.SALES` (v1) eliminada. Retry, `errors` e idempotencia re-probados con v2 (semanas 1, 2 y 10).
 - [x] Probar un fallo a propósito para mostrar el retry. Input `simulate_failure` (TRANSIENT → 2 intentos y SUCCESS; PERMANENT → 3 intentos, bloque `errors` y fila FAILED en LOAD_LOG). Semana 100 sigue con 213.430 filas.
 - [x] Probar la idempotencia: re-ejecutar una semana y verificar que el conteo no cambia.
-- [ ] **Sáb 3-oct:** confirmar que el tick del cron cargó la semana 277 (Mac y Docker encendidos; si no, `recoverMissedSchedules` la corre al volver). Verificar `SALES_RAW` con 8.476.220 filas y, tras `dbt build -s stg_sales+`, `stg_sales` con 59.181.090 filas y SUM 66.927.173. Guardar captura de esa ejecución (sin label `backfill`) para el documento.
+- [x] **Sáb 3-oct:** semana 277 cargada (`SALES_RAW` 8.476.220 filas, 30.490 de la 277, 0 `_loaded_at` NULL). **No entró por el cron:** la Mac estaba suspendida a las 06:00 UTC y, al volver, el scheduler de Kestra no disparó el tick vencido ni con `recoverMissedSchedules: ALL`, ni tras dos reinicios, ni un backfill de esa fecha (quedó pendiente en el trigger). Se cargó con una ejecución por API con `week_idx = 277` (id `7e3WRGURerEdmwUkq9p0PC`). Causa del scheduler sin identificar: contarlo en Limitaciones. `dbt build -s stg_sales+` y la OBT re-corridos el 4-oct: 59.181.090 filas, SUM 66.927.173.
 
 **Listo cuando:** Bronze tiene las 278 entregas de ventas (8.476.220 filas en `SALES_RAW` → 59.181.090 en `stg_sales`), 6.841.121 de precios y 1.969 de calendario, sin cargas manuales.
 
@@ -146,12 +146,12 @@ Tareas:
 - [x] Construir la OBT: fact + dims + SNAP del estado de la tienda (left joins con broadcast). Grain = SKU–tienda–día (el mismo del fact). Sin `persist`: cachear 59 M filas dio OutOfMemoryError con 4 GB de worker.
 - [x] Validar joins: conteo antes = después, unicidad de la llave, nulos en columnas de dims = 0, estado fact = estado `dim_store`. Si algo falla, no escribe.
 - [x] Escribir en `OBT` de Snowflake (`OBT_SALES`, overwrite con tabla de staging) y verificar el conteo leyendo de vuelta.
-- [ ] Re-correr `build_obt.py` después de la semana 277 (`dbt build` de Gold primero): deben quedar 59.181.090 filas.
+- [x] Re-corrida tras la semana 277 (4-oct): `dbt build -s stg_sales+` (`stg_sales` y `fact_sales` con 59.181.090 filas, SUM 66.927.173) y `build_obt.py` → `OBT.OBT_SALES` con 59.181.090 filas, todas las validaciones OK, 756 s. Ojo: tras suspender la Mac el worker de Spark se desregistra del master (el job queda esperando recursos); se arregla con `docker compose restart spark-worker`.
 - [ ] Explicar cuándo usar el star schema (análisis, BI, dbt tests) y cuándo la OBT (entrenar el modelo).
 
 ## Fase 6 — Documento técnico (≤ 6 páginas) y README
 
-- [ ] Diagrama de arquitectura.
+- [x] Diagrama de arquitectura: `docs/img/arquitectura.png` (fuente `arquitectura.py` → SVG), insertado en el README.
 - [ ] Secciones: Arquitectura, Ingesta, Data Quality, Transformaciones y modelado, Spark y OBT, Batch vs streaming, Limitaciones.
 - [ ] Batch vs streaming: M5 es diario/histórico y la decisión (reposición semanal) tolera latencia de días. Streaming solo se justificaría con reposición intradía, inventario en tiempo real o alertas de quiebre.
 - [ ] README: cómo levantar la infraestructura y ejecutar Kestra, dbt y Spark paso a paso. Probarlo desde cero.

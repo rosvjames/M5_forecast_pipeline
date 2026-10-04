@@ -11,9 +11,13 @@ Kaggle → Kestra → BRONZE → dbt → SILVER → dbt → GOLD → Spark → O
 - **dbt** limpia (Silver) y modela el star schema (Gold).
 - **Spark** construye la One Big Table (OBT) a partir de Gold y la escribe de vuelta en Snowflake.
 
+![Arquitectura del pipeline](docs/img/arquitectura.png)
+
+Kestra, dbt y Spark corren en contenedores locales (Docker Compose); los datos viven siempre en Snowflake. Las flechas sólidas son movimiento de datos; las punteadas, SQL que dbt ejecuta dentro de Snowflake. El diagrama se regenera con `python3 docs/img/arquitectura.py`.
+
 El enfoque del proyecto y las decisiones de diseño están en [`docs/enfoque_proyecto.md`](docs/enfoque_proyecto.md). El avance por fases está en [`docs/roadmap_pset2.md`](docs/roadmap_pset2.md).
 
-> **Estado actual (2-oct-2026):** infraestructura lista e ingesta a Bronze completa hasta la semana 276 (la 277 entra con el cron del sábado 3-oct). Silver y el star schema de Gold están construidos y testeados con dbt; quedan pendientes los flags de quiebre de stock, la OBT en Spark y el documento. El diagnóstico de calidad está en [`docs/calidad_datos.md`](docs/calidad_datos.md). Qué hay hecho y en qué se puede ayudar: [`docs/roadmap_pset2.md`](docs/roadmap_pset2.md#estado-actual-y-cómo-sumarse).
+> **Estado actual (4-oct-2026):** pipeline completo de punta a punta con las 278 semanas: Bronze (`SALES_RAW`, 8.476.220 filas), Silver y star schema de Gold construidos y testeados con dbt (59.181.090 filas en `fact_sales`), y `OBT.OBT_SALES` construida con Spark con las mismas 59.181.090 filas. Pendiente: flags de quiebre de stock (`int_stockout_flags`) y el documento. El diagnóstico de calidad está en [`docs/calidad_datos.md`](docs/calidad_datos.md) y el avance en [`docs/roadmap_pset2.md`](docs/roadmap_pset2.md#estado-actual-y-cómo-sumarse).
 
 ---
 
@@ -27,7 +31,6 @@ erDiagram
     dim_item       ||--o{ fact_sales     : "item_id"
     dim_store      ||--o{ fact_sales     : "store_id"
     dim_date_state ||--o{ fact_sales     : "date_key + state_id"
-    dim_date       ||--|{ dim_date_state : "date_key"
     dim_date       |o--o| dim_date       : "date_key_ly_364"
 
     fact_sales {
