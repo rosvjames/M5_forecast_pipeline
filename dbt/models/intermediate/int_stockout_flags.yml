@@ -1,0 +1,57 @@
+version: 2
+
+models:
+  - name: int_stockout_flags
+    description: >
+      Posibles quiebres de stock (calidad #4): días dentro de una racha de ceros anómala, con dos reglas
+      (conservadora y binomial negativa). La tasa y la dispersión usan solo días anteriores a la racha.
+      Una fila por item × tienda × día marcado; los días que no están aquí no son sospechosos.
+    data_tests:
+      # Grain: el join desde fact_sales no puede duplicar filas.
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [item_id, store_id, date]
+      # Solo se guardan días marcados por al menos una regla.
+      - dbt_utils.expression_is_true:
+          expression: "is_suspected_stockout_conservative or is_suspected_stockout_nb"
+      # Umbrales de la regla conservadora.
+      - dbt_utils.expression_is_true:
+          expression: "run_length >= 14 and local_rate >= 1"
+          config:
+            where: "is_suspected_stockout_conservative"
+      # Umbral de largo de la regla binomial negativa.
+      - dbt_utils.expression_is_true:
+          expression: "run_length >= 7"
+          config:
+            where: "is_suspected_stockout_nb"
+      # El día está dentro de su racha y la racha mide lo que dice (menos los días omitidos: Navidad y cierres).
+      - dbt_utils.expression_is_true:
+          expression: "date between run_start_date and run_end_date and run_length <= datediff(day, run_start_date, run_end_date) + 1"
+    columns:
+      - name: item_id
+        data_tests:
+          - not_null
+      - name: store_id
+        data_tests:
+          - not_null
+      - name: date
+        data_tests:
+          - not_null
+      - name: is_suspected_stockout_conservative
+        description: "Racha >= 14 días con tasa local >= 1 u/día"
+        data_tests:
+          - not_null
+      - name: is_suspected_stockout_nb
+        description: "Racha >= 7 días con P(racha) < 0,001 bajo binomial negativa (Poisson si la serie no es sobredispersa)"
+        data_tests:
+          - not_null
+      - name: run_length
+        description: "Días de la racha, sin contar Navidad ni cierres de tienda. No es causal: se conoce cuando la racha termina"
+      - name: local_rate
+        description: "Media de ventas de los 56 días previos a la racha (exige >= 28 días)"
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              inclusive: false
+      - name: nb_k
+        description: "Dispersión de la binomial negativa con la historia previa a la racha. NULL: sin sobredispersión, se usa Poisson"

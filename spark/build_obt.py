@@ -57,6 +57,7 @@ obt = (
         "is_snap",
         # Flags de calidad (docs/calidad_datos.md): se marcan, no se borran
         "is_pre_launch", "is_store_closed", "is_sales_spike",
+        "is_suspected_stockout_conservative", "is_suspected_stockout_nb",
         # Linaje
         "week_idx", "_loaded_at",
     )

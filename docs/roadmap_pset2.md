@@ -19,8 +19,9 @@ Fase 3 (Silver) cerrada salvo los flags de quiebre de stock, que se dejaron para
 1. ~~Fase 4 (Gold)~~ ✅ 2-oct, con diagrama en el README.
 2. ~~Semana 277 y `dbt build -s stg_sales+`~~ ✅ 3 y 4-oct.
 3. ~~Fase 5 (Spark → OBT)~~ ✅ re-corrida el 4-oct con la semana 277.
-4. `int_stockout_flags` (calidad #4): reglas conservadora y binomial negativa, con `k` **causal** (ventana expansiva hasta el día previo a la racha; el EDA usaba la serie completa → fuga). Recalcular los % y actualizar `calidad_datos.md` #4 y el §5 del enfoque.
-5. Documento (domingo).
+4. ~~`int_stockout_flags` (calidad #4)~~ ✅ 4-oct, con tasa y `k` causales.
+5. ~~Documento~~ ✅ 4-oct (PDF de 5 páginas).
+6. ~~Orquestación de dbt y Spark desde Kestra~~ ✅ 4-oct (flow `transform`).
 
 ## Estado actual y cómo sumarse
 
@@ -31,8 +32,8 @@ Fase 3 (Silver) cerrada salvo los flags de quiebre de stock, que se dejaron para
 | 0 · Infraestructura (PDF §1) | ✅ Docker Compose con Kestra, Spark y dbt, conectado a Snowflake. Diagrama en `docs/img/arquitectura.png`. |
 | 1 · Ingesta Kestra → Bronze (PDF §2) | ✅ Rediseñada (v2, 28-sep): Bronze guarda las entregas semanales tal cual (`SALES_RAW`, formato ancho, carga por nombre de columna). Backfill v2 terminado y verificado (29-sep). Semana 277 cargada el 3-oct por ejecución de API (el tick del cron no disparó; ver Fase 1): 278 semanas, 8.476.220 filas. |
 | 2 · Calidad (PDF §3) | ✅ Tests de contrato en Bronze y de unpivot en `stg_sales`, 4 analyses (`dbt/analyses/dq_0*`) y tabla de decisiones en `docs/calidad_datos.md`. Los flags se implementan en Silver. |
-| 3 · dbt Silver | 🔄 `stg_calendar`, `stg_sell_prices` e `int_sales_daily` (fecha, precio, ingreso, SNAP y flags #1, #2, #3, #5) listos y testeados. Falta `int_stockout_flags` (#4), pospuesto. |
-| 4 · dbt Gold (star schema) | ✅ `fact_sales`, `dim_date`, `dim_item`, `dim_store` y `dim_date_state` (SNAP) en `GOLD`, diagrama en el README (2-oct); 118 tests en verde en todo el proyecto (4-oct). |
+| 3 · dbt Silver | ✅ `stg_calendar`, `stg_sell_prices` e `int_sales_daily` (fecha, precio, ingreso, SNAP y flags #1, #2, #3, #5) listos y testeados. `int_stockout_flags` (#4) hecho el 4-oct. |
+| 4 · dbt Gold (star schema) | ✅ `fact_sales`, `dim_date`, `dim_item`, `dim_store` y `dim_date_state` (SNAP) en `GOLD`, diagrama en el README (2-oct); 133 tests en verde en todo el proyecto (4-oct). |
 | 5 · Spark → OBT | ✅ `spark/build_obt.py` (conector `spark-snowflake` 3.2.2 en `spark/Dockerfile`): `OBT.OBT_SALES`, 59.181.090 filas (278 semanas), validaciones OK (4-oct, ~13 min). |
 | Orquestación de punta a punta | ✅ Flow `transform` (4-oct): se dispara al terminar `load_sales_week` y corre `dbt build` y luego `spark-submit build_obt.py`. Detalle en el paso 10 del README. |
 | 6 · Documento y README | ✅ Memo en PDF (`PSet2_memo_*.pdf`) y README con los pasos 1–10 (4-oct). Falta probar el README en una cuenta limpia. |
@@ -114,7 +115,7 @@ Tareas:
 - [x] Recalcular en Snowflake (SQL sobre Bronze) las métricas del EDA: completitud, precisión, consistencia, validez. `dbt/analyses/dq_01`–`dq_04`, todas < 15 s.
 - [x] Tabla Problema | Evidencia | Acción | Justificación: `docs/calidad_datos.md`.
 - [x] Cada decisión con métrica concreta (ej. "20,8 % de los días-serie son previos al lanzamiento").
-- [ ] Cada acción con su modelo o test en dbt: se completa en las Fases 3 y 4 (flags de `docs/calidad_datos.md`).
+- [x] Cada acción con su modelo o test en dbt (flags de `docs/calidad_datos.md`): completo el 4-oct con `int_stockout_flags` (#4).
 
 **Listo cuando:** la tabla está completa y cada acción tiene su modelo o test en dbt.
 
@@ -124,7 +125,7 @@ Tareas:
 - [x] Modelos `stg_*`: `stg_sales` (unpivot), `stg_calendar` (d_num, SNAP booleano, eventos, Navidad, horizonte), `stg_sell_prices` (`launch_wm_yr_wk`).
 - [x] `int_sales_daily`: join ventas → calendario → precios (left, por tienda + item + `wm_yr_wk`), ingreso, SNAP del estado. Cifras iguales a `calidad_datos.md`.
 - [x] Flags: `is_pre_launch` (#1, por primera semana con precio, no por primera venta: 144 series se lanzaron antes de vender), `is_christmas_closed` (#2), `is_store_closed` (#3, seed `store_closures`), `is_sales_spike` (#5, solo diagnóstico).
-- [ ] `int_stockout_flags`: `is_suspected_stockout_conservative` y `is_suspected_stockout_nb` (#4, `k` causal). **Pospuesto** hasta después de Spark.
+- [x] `int_stockout_flags`: `is_suspected_stockout_conservative` y `is_suspected_stockout_nb` (#4, tasa y `k` causales). Hecho el 4-oct: 4,2 % y 14,5 % de los días activos; llegan a `fact_sales` y a la OBT.
 - [x] Materialización: `stg_sales` incremental por semana; `int_sales_daily` table (la mediana de picos usa la serie completa; rebuild ~30 s); `stg_sell_prices` table; `stg_calendar` view.
 - [x] Tests: grain, `equal_rowcount` contra `stg_sales`, sin ventas antes del lanzamiento, sin días post-lanzamiento sin precio, `accepted_values`, rangos, conversión `d` → fecha exacta.
 

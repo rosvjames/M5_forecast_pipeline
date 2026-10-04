@@ -17,7 +17,7 @@ Kestra, dbt y Spark corren en contenedores locales (Docker Compose); los datos v
 
 El enfoque del proyecto y las decisiones de diseño están en [`docs/enfoque_proyecto.md`](docs/enfoque_proyecto.md). El avance por fases está en [`docs/roadmap_pset2.md`](docs/roadmap_pset2.md).
 
-> **Estado actual (4-oct-2026):** pipeline completo de punta a punta con las 278 semanas: Bronze (`SALES_RAW`, 8.476.220 filas), Silver y star schema de Gold construidos y testeados con dbt (59.181.090 filas en `fact_sales`), y `OBT.OBT_SALES` construida con Spark con las mismas 59.181.090 filas. Kestra encadena la carga semanal con dbt y Spark (flow `transform`). Pendiente: flags de quiebre de stock (`int_stockout_flags`), declarados como limitación en el documento técnico. El diagnóstico de calidad está en [`docs/calidad_datos.md`](docs/calidad_datos.md) y el avance en [`docs/roadmap_pset2.md`](docs/roadmap_pset2.md#estado-actual-y-cómo-sumarse).
+> **Estado actual (4-oct-2026):** pipeline completo de punta a punta con las 278 semanas: Bronze (`SALES_RAW`, 8.476.220 filas), Silver y star schema de Gold construidos y testeados con dbt (59.181.090 filas en `fact_sales`), y `OBT.OBT_SALES` construida con Spark con las mismas 59.181.090 filas. Kestra encadena la carga semanal con dbt y Spark (flow `transform`). El diagnóstico de calidad está en [`docs/calidad_datos.md`](docs/calidad_datos.md) y el avance en [`docs/roadmap_pset2.md`](docs/roadmap_pset2.md#estado-actual-y-cómo-sumarse).
 
 ---
 
@@ -44,6 +44,8 @@ erDiagram
         boolean is_pre_launch "calidad 1"
         boolean is_store_closed "calidad 3"
         boolean is_sales_spike "calidad 5, solo diagnostico"
+        boolean is_suspected_stockout_conservative "calidad 4"
+        boolean is_suspected_stockout_nb "calidad 4"
         int week_idx "linaje: entrega semanal"
     }
     dim_date {
@@ -295,7 +297,7 @@ WHERE week_idx = 100 ORDER BY loaded_at DESC LIMIT 3;
 
 ### 8. Construir Silver y Gold (dbt)
 
-Con Bronze completo, instala los paquetes de dbt (una sola vez) y construye todo el proyecto: el seed `store_closures`, los modelos de Silver y Gold y los 118 tests, en orden de dependencias.
+Con Bronze completo, instala los paquetes de dbt (una sola vez) y construye todo el proyecto: el seed `store_closures`, los modelos de Silver y Gold y los 133 tests, en orden de dependencias.
 
 ```bash
 docker compose run --rm dbt deps

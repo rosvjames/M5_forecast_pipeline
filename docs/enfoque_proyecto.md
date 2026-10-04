@@ -114,14 +114,15 @@ Los quiebres se aproximan con rachas de ceros anómalas en productos con precio 
 
 | Regla | Definición | Series afectadas | Días activos afectados |
 |---|---|---|---|
-| Conservadora | Tasa local ≥ 1 unidad/día y racha ≥ 14 días | 37,0 % | 4,2 % |
-| Binomial negativa | Tasa de los 56 días previos, p < 0,001, racha ≥ 7 días | 89,5 % | 14,4 % |
+| Conservadora | Tasa local ≥ 1 unidad/día y racha ≥ 14 días | 37,0 % | 4,2 % (1.946.313 días) |
+| Binomial negativa | Tasa de los 56 días previos, p < 0,001, racha ≥ 7 días | 89,8 % | 14,5 % (6.778.366 días) |
 
-Ventas posiblemente perdidas (**cota superior**): entre 8,8 % y 12,7 % de las unidades vendidas. Las rachas mezclan quiebres, descatalogaciones y caídas reales de demanda, y con M5 no se pueden separar. Como referencia externa, FreshRetailNet (quiebres etiquetados) reporta una subestimación de la demanda de ~7 % al ignorar la censura: el mismo orden de magnitud.
+Ventas posiblemente perdidas (**cota superior**): entre 8,8 % y 12,8 % de las unidades vendidas. Las rachas mezclan quiebres, descatalogaciones y caídas reales de demanda, y con M5 no se pueden separar. Como referencia externa, FreshRetailNet (quiebres etiquetados) reporta una subestimación de la demanda de ~7 % al ignorar la censura: el mismo orden de magnitud.
 
 **Implementación:**
 
-- Columnas previstas en Silver: `is_suspected_stockout_conservative` y `is_suspected_stockout_nb`. **Aún no implementadas** (al 4-oct-2026): las cifras de la tabla son del EDA, con un `k` no causal, y se recalcularán con ventana causal.
+- Implementado el 4-oct-2026 en `dbt/models/intermediate/int_stockout_flags.sql`: columnas `is_suspected_stockout_conservative` y `is_suspected_stockout_nb`, que llegan a `fact_sales` y a la OBT. La tasa local y la dispersión `k` usan solo días anteriores a la racha (el EDA calculaba `k` con la serie completa). Las cifras de la tabla son las del modelo; casi no cambian respecto del EDA (4,2 % y 14,4 %).
+- El largo de la racha no es causal: el día se marca sabiendo cuánto duró la racha. Los flags sirven para filtrar rachas ya cerradas, no como feature.
 - Análisis de sensibilidad: métricas con esos días (a) incluidos, (b) excluidos de la evaluación y (c) imputados.
 - Se declara como limitación: el nivel de servicio logrado en backtesting es optimista, porque se mide contra ventas y no contra demanda.
 
@@ -176,7 +177,7 @@ Complementos opcionales, no para el PSet 2: FreshRetailNet para validar la regla
 |---|---|---|
 | Ceros antes del lanzamiento | 12,4 M días-serie (20,9 % de la matriz), sin precio | Marcar o filtrar desde la primera semana con precio |
 | Navidad (tiendas cerradas) | 5 días con 11–20 unidades en total, frente a ~27–34 mil un día normal | Flag `is_christmas_closed` y excluir de entrenamiento y evaluación |
-| Quiebres sospechosos | 4,2 %–14,4 % de días activos | Flags de la sección 5 |
+| Quiebres sospechosos | 4,2 %–14,5 % de días activos | Flags de la sección 5 |
 | Cierres puntuales de tienda | WI_1 (2011-02-02), TX_2 (2015-03-24) | Flag de cierre |
 | Picos extremos | 6,4 % de las series con días > 10× su mediana no nula | Marcar; no eliminar sin revisar |
 | Eventos nulos | 91,8 % en `event_name_1` | Nulo estructural (día sin evento), no error |

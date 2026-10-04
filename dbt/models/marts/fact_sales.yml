@@ -22,6 +22,11 @@ models:
           expression: "sell_price is not null"
           config:
             where: "units > 0"
+      # Calidad #4: un día marcado como posible quiebre es un día sin ventas, posterior al lanzamiento.
+      - dbt_utils.expression_is_true:
+          expression: "units = 0 and not is_pre_launch"
+          config:
+            where: "is_suspected_stockout_conservative or is_suspected_stockout_nb"
       # El ingreso cuadra con unidades × precio.
       - dbt_utils.expression_is_true:
           expression: "revenue = units * sell_price"
@@ -68,5 +73,13 @@ models:
           - not_null
       - name: is_sales_spike
         description: "Solo diagnóstico: no es feature, no filtra entrenamiento ni excluye días de la métrica principal"
+        data_tests:
+          - not_null
+      - name: is_suspected_stockout_conservative
+        description: "Posible quiebre de stock, regla conservadora: racha de ceros >= 14 días con tasa local >= 1 u/día (calidad #4). Marca la racha completa: sirve para filtrar, no como feature"
+        data_tests:
+          - not_null
+      - name: is_suspected_stockout_nb
+        description: "Posible quiebre de stock, regla binomial negativa: racha >= 7 días con probabilidad < 0,001 (calidad #4). Marca la racha completa: sirve para filtrar, no como feature"
         data_tests:
           - not_null
