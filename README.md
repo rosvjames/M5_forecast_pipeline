@@ -15,9 +15,9 @@ Kaggle → Kestra → BRONZE → dbt → SILVER → dbt → GOLD → Spark → O
 
 Kestra, dbt y Spark corren en contenedores locales (Docker Compose); los datos viven siempre en Snowflake. Las flechas sólidas son movimiento de datos; las punteadas, SQL que dbt ejecuta dentro de Snowflake. El diagrama se regenera con `python3 docs/img/arquitectura.py`.
 
-El enfoque del proyecto y las decisiones de diseño están en [`docs/enfoque_proyecto.md`](docs/enfoque_proyecto.md). El avance por fases está en [`docs/roadmap_pset2.md`](docs/roadmap_pset2.md).
+El enfoque del proyecto y las decisiones de diseño están en [`docs/enfoque_proyecto.md`](docs/enfoque_proyecto.md). El documento técnico de la entrega es [`docs/PSet2_memo_Soto_Tulcan_Avalos-Quiroga-Bucheli.pdf`](docs/PSet2_memo_Soto_Tulcan_Avalos-Quiroga-Bucheli.pdf).
 
-> **Estado actual (4-oct-2026):** pipeline completo de punta a punta con las 278 semanas: Bronze (`SALES_RAW`, 8.476.220 filas), Silver y star schema de Gold construidos y testeados con dbt (59.181.090 filas en `fact_sales`), y `OBT.OBT_SALES` construida con Spark con las mismas 59.181.090 filas. Kestra encadena la carga semanal con dbt y Spark (flow `transform`). El diagnóstico de calidad está en [`docs/calidad_datos.md`](docs/calidad_datos.md) y el avance en [`docs/roadmap_pset2.md`](docs/roadmap_pset2.md#estado-actual-y-cómo-sumarse).
+> **Estado actual (4-oct-2026):** pipeline completo de punta a punta con las 278 semanas: Bronze (`SALES_RAW`, 8.476.220 filas), Silver y star schema de Gold construidos y testeados con dbt (59.181.090 filas en `fact_sales`), y `OBT.OBT_SALES` construida con Spark con las mismas 59.181.090 filas. Kestra encadena la carga semanal con dbt y Spark (flow `transform`). El diagnóstico de calidad está en [`docs/calidad_datos.md`](docs/calidad_datos.md).
 
 ---
 
@@ -113,7 +113,7 @@ pset_2/
 ├── dbt/                 # Proyecto dbt (profiles.yml lee todo de variables de entorno)
 ├── spark/               # Dockerfile (Spark + conector Snowflake) y scripts PySpark (montados en /opt/spark-apps)
 ├── snowflake/setup.sql  # Crea warehouse, base, esquemas, rol y usuario de servicio
-└── docs/                # Enfoque del proyecto y roadmap
+└── docs/                # Enfoque del proyecto, diagnóstico de calidad y documento técnico (PDF)
 ```
 
 ---

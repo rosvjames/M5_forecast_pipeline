@@ -21,3 +21,6 @@ kaggle.json
 __pycache__/
 .venv/
 .user.yml
+
+# Notas de trabajo locales
+docs/roadmap_pset2.md

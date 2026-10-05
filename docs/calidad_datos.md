@@ -11,7 +11,7 @@ docker compose run --rm dbt show -s dq_03_consistencia --limit 20
 docker compose run --rm dbt show -s dq_04_validez     --limit 20
 ```
 
-*Corte: 4-oct-2026, `SALES_RAW` con las semanas 0–277 (8.476.220 filas) → `stg_sales` hasta d_1941 (59.181.090 filas, 66.927.173 unidades). La semana 277 (d_1940–1941) se cargó el 3-oct ejecutando el flow por la API, porque el tick del cron no disparó (ver roadmap). `dbt test`: 133/133 PASS.*
+*Corte: 4-oct-2026, `SALES_RAW` con las semanas 0–277 (8.476.220 filas) → `stg_sales` hasta d_1941 (59.181.090 filas, 66.927.173 unidades). La semana 277 (d_1940–1941) se cargó el 3-oct ejecutando el flow por la API, porque el tick del cron no disparó (ver [`enfoque_proyecto.md`](enfoque_proyecto.md), sección 8). `dbt test`: 133/133 PASS.*
 
 ## Cómo se organiza la revisión
 
