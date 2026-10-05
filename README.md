@@ -267,15 +267,12 @@ La ingesta usa dos flows del namespace `m5.pipeline` (el tercero, `transform`, e
    SELECT COUNT(*) FROM M5.BRONZE.SELL_PRICES;    -- 6.841.121
    SELECT COUNT(*), COUNT(DISTINCT week_idx), MIN(week_idx), MAX(week_idx), COUNT_IF(_loaded_at IS NULL)
    FROM M5.BRONZE.SALES_RAW;
-   -- Con el backfill hasta hoy: 8.445.730 | 277 | 0 | 276 | 0   (30.490 series por semana)
-   -- Con las 278 semanas:      8.476.220 | 278 | 0 | 277 | 0
+   -- 8.476.220 | 278 | 0 | 277 | 0   (278 semanas, 30.490 series por semana)
    ```
    `M5.BRONZE.LOAD_LOG` guarda una fila por carga (ejecución, tabla, semana, filas y estado).
-4. Cuando el backfill haya terminado, construye el proyecto dbt (paso 8). El paso a formato largo de las ventas (`stg_sales`) tarda ~2 min la primera vez. Para comprobarlo:
+4. No lances dbt ni Spark a mano todavía: cuando el backfill carga la última semana (277), el flow `transform` se dispara solo y ejecuta `dbt build` y luego el job de Spark ([paso 10](#10-orquestación-de-punta-a-punta-kestra)). Espera a que esa ejecución de `transform` termine en verde (solo Spark tarda unos 13 minutos). Para comprobar el paso a formato largo de las ventas (`stg_sales`):
    ```sql
-   SELECT COUNT(*), SUM(sales) FROM M5.SILVER.STG_SALES;
-   -- Con el backfill hasta hoy: 59.120.110 | 66.821.317
-   -- Con las 278 semanas:      59.181.090 | 66.927.173
+   SELECT COUNT(*), SUM(sales) FROM M5.SILVER.STG_SALES;   -- 59.181.090 | 66.927.173
    ```
 
 Re-ejecutar cualquiera de los dos flows no duplica datos.
@@ -297,6 +294,8 @@ WHERE week_idx = 100 ORDER BY loaded_at DESC LIMIT 3;
 
 ### 8. Construir Silver y Gold (dbt)
 
+> En una instalación nueva, `transform` ya ejecutó los pasos 8 y 9 al terminar el backfill: basta con revisar los conteos. Los comandos de abajo sirven para reconstruir a mano o para desarrollar. No los ejecutes mientras `transform` está corriendo, porque los dos escribirían las mismas tablas.
+
 Con Bronze completo, instala los paquetes de dbt (una sola vez) y construye todo el proyecto: el seed `store_closures`, los modelos de Silver y Gold y los 133 tests, en orden de dependencias.
 
 ```bash
@@ -308,7 +307,7 @@ docker compose run --rm dbt build
 SELECT COUNT(*), SUM(units) FROM M5.GOLD.FACT_SALES;   -- 59.181.090 | 66.927.173 con las 278 semanas
 ```
 
-Esta corrida a mano solo hace falta la primera vez o para desarrollar: después de cada carga semanal, Kestra ejecuta `dbt build` por su cuenta (paso 10).
+Después de cada carga semanal, Kestra ejecuta `dbt build` por su cuenta (paso 10).
 
 ### 9. Construir la OBT (Spark)
 
@@ -402,6 +401,7 @@ docker compose down -v     # además BORRA los volúmenes: historial de Kestra y
 | El backfill falla con `Backfill["labels"] … key: null, value: null` | Quedó una fila de label vacía en *Other properties*. Llénala o bórrala. |
 | `assert_stg_sales_weeks_complete` falla | Se corrió dbt mientras el backfill seguía cargando semanas. Espera a que termine y vuelve a correr `dbt build -s stg_sales+`. |
 | Semanas mezcladas o `week_idx` NULL en `SALES_RAW` | Se subió `concurrency` en `load_sales_week`. El `UPDATE ... WHERE week_idx IS NULL` supone una sola carga a la vez: déjalo en `limit: 1`. |
+| En Linux, `build_obt.py` o `test_connection.py` fallan con `Permission denied: '/secrets/rsa_key.p8'` | El contenedor de Spark corre con el usuario `spark` (uid 185) y la llave tiene `chmod 600`. Dale lectura a ese usuario con `sudo setfacl -m u:185:r ~/.snowflake/rsa_key.p8` (o `chmod 644` si el equipo es solo tuyo). En macOS no ocurre. |
 | dbt va lento en Mac con chip Apple | La imagen de dbt es solo `amd64` y corre emulada (`platform: linux/amd64`). Es esperado. |
 
 ## Seguridad
